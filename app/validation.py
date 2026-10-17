@@ -196,6 +196,58 @@ _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 VALID_CONFIDENCE = {"high", "medium", "low"}
 
+VALID_MODES = {
+    "auto",
+    "notes",
+    "flowchart",
+    "mindmap",
+    "architecture",
+    "actions",
+    "concept",
+    "er",
+}
+
+
+def _schema_echoes() -> frozenset[str]:
+    """Placeholder strings quoted inside the JSON schema we send the model.
+
+    Small models frequently copy these example values straight back instead of
+    reading the image, so anything matching one is discarded as a non-answer.
+    Derived from the prompt so it can never drift out of sync with it.
+    """
+    from . import prompts
+
+    return frozenset(
+        match.strip().lower()
+        for match in re.findall(r'"([^"\\]{4,})"', prompts._JSON_SCHEMA)
+    )
+
+
+_SCHEMA_ECHOES = _schema_echoes()
+
+
+_ENUM_TOKENS = VALID_MODES | VALID_CONFIDENCE | {
+    "flowchart",
+    "mindmap",
+    "erDiagram",
+    "sequenceDiagram",
+}
+
+
+def is_schema_echo(value: Any) -> bool:
+    """True when a string is the prompt's placeholder rather than real content."""
+    if not isinstance(value, str):
+        return False
+    text = value.strip().lower()
+    if not text:
+        return False
+    if text in _SCHEMA_ECHOES:
+        return True
+    # Enum fields get echoed back as the raw option list, e.g.
+    # "notes|flowchart|mindmap|architecture|actions|concept|er".
+    parts = [p.strip() for p in text.split("|")]
+    return len(parts) > 1 and all(p in _ENUM_TOKENS for p in parts)
+
 
 @dataclass
 class Extraction:
@@ -282,11 +334,13 @@ def _as_str_list(value: Any) -> list[str]:
     out = []
     for item in value:
         if isinstance(item, str) and item.strip():
-            out.append(item.strip())
+            if not is_schema_echo(item):
+                out.append(item.strip())
         elif isinstance(item, dict):
             for key in ("text", "content", "item", "takeaway", "suggestion"):
                 if isinstance(item.get(key), str) and item[key].strip():
-                    out.append(item[key].strip())
+                    if not is_schema_echo(item[key]):
+                        out.append(item[key].strip())
                     break
     return out
 
@@ -297,7 +351,7 @@ def _as_notes(value: Any) -> list[dict[str, Any]]:
     out = []
     for item in value:
         if isinstance(item, str):
-            if item.strip():
+            if item.strip() and not is_schema_echo(item):
                 out.append({"heading": "Notes", "content": [item.strip()], "confidence": "medium"})
             continue
         if not isinstance(item, dict):
@@ -305,13 +359,16 @@ def _as_notes(value: Any) -> list[dict[str, Any]]:
         content = _as_str_list(item.get("content")) or _as_str_list(item.get("lines"))
         if not content:
             continue
-        heading = item.get("heading") or item.get("title") or "Notes"
+        raw_heading = item.get("heading") or item.get("title") or "Notes"
+        heading = "Notes" if is_schema_echo(raw_heading) else str(raw_heading).strip()[:200]
+        if not heading:
+            heading = "Notes"
         conf = str(item.get("confidence", "medium")).strip().lower()
         if conf not in VALID_CONFIDENCE:
             conf = "medium"
         out.append(
             {
-                "heading": str(heading).strip()[:200],
+                "heading": heading,
                 "content": content,
                 "confidence": conf,
             }
@@ -332,6 +389,8 @@ def _as_action_items(value: Any) -> list[dict[str, Any]]:
             continue
         task = item.get("task") or item.get("action") or item.get("text")
         if not isinstance(task, str) or not task.strip():
+            continue
+        if is_schema_echo(task):
             continue
         owner = item.get("owner")
         deadline = item.get("deadline")
@@ -362,16 +421,42 @@ def _as_uncertain(value: Any) -> list[dict[str, str]]:
         return []
     out = []
     for item in value:
-        if isinstance(item, str) and item.strip():
+        if isinstance(item, str) and item.strip() and not is_schema_echo(item):
             out.append({"text_or_location": item.strip(), "reason": "Flagged as uncertain"})
             continue
         if not isinstance(item, dict):
             continue
         loc = item.get("text_or_location") or item.get("location") or item.get("text")
         reason = item.get("reason") or item.get("why") or "Illegible or ambiguous"
-        if isinstance(loc, str) and loc.strip():
-            out.append({"text_or_location": loc.strip(), "reason": str(reason).strip()})
+        if isinstance(loc, str) and loc.strip() and not is_schema_echo(loc):
+            out.append(
+                {
+                    "text_or_location": loc.strip(),
+                    "reason": "Illegible or ambiguous"
+                    if is_schema_echo(reason)
+                    else str(reason).strip(),
+                }
+            )
     return out
+
+
+def _string_values(value: Any, depth: int = 0) -> list[str]:
+    """Every string anywhere in the payload, used to spot a schema echo."""
+    if depth > 6:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        out: list[str] = []
+        for item in value.values():
+            out.extend(_string_values(item, depth + 1))
+        return out
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            out.extend(_string_values(item, depth + 1))
+        return out
+    return []
 
 
 def normalize_extraction(
@@ -384,6 +469,7 @@ def normalize_extraction(
 
     Never raises. Missing or wrong-typed fields degrade to empty rather than
     crashing, because notes and text must survive even when diagram fails.
+    Placeholder values copied back out of the prompt are dropped, never shown.
     """
     warnings: list[str] = []
     if payload is None:
@@ -393,18 +479,28 @@ def normalize_extraction(
             warnings=["The model did not return a parseable JSON object."],
         )
 
-    title = payload.get("title")
-    title = str(title).strip()[:160] if isinstance(title, str) and title.strip() else "Untitled Extraction"
+    raw_title = payload.get("title")
+    if not isinstance(raw_title, str) or not raw_title.strip() or is_schema_echo(raw_title):
+        title = "Untitled Extraction"
+    else:
+        title = raw_title.strip()[:160]
 
     raw_detected = payload.get("detected_mode")
-    detected_mode = (
-        str(raw_detected).strip().lower()
-        if isinstance(raw_detected, str) and raw_detected.strip()
-        else (requested_mode if requested_mode != "auto" else None)
-    )
+    detected_mode: str | None = None
+    if isinstance(raw_detected, str):
+        candidate = raw_detected.strip().lower()
+        # Only a real mode name counts; "notes|flowchart|..." is an echoed enum.
+        if candidate in VALID_MODES and candidate != "auto":
+            detected_mode = candidate
+    if detected_mode is None and requested_mode != "auto":
+        detected_mode = requested_mode
 
-    summary = payload.get("summary")
-    summary = str(summary).strip() if isinstance(summary, str) and summary.strip() else ""
+    raw_summary = payload.get("summary")
+    summary = (
+        str(raw_summary).strip()
+        if isinstance(raw_summary, str) and raw_summary.strip() and not is_schema_echo(raw_summary)
+        else ""
+    )
 
     notes = _as_notes(payload.get("notes"))
     takeaways = _as_str_list(payload.get("takeaways"))
@@ -415,7 +511,7 @@ def normalize_extraction(
     raw_sql = payload.get("sql_schema")
     sql_schema = (
         str(raw_sql).strip()
-        if isinstance(raw_sql, str) and raw_sql.strip()
+        if isinstance(raw_sql, str) and raw_sql.strip() and not is_schema_echo(raw_sql)
         else None
     )
 
@@ -424,7 +520,9 @@ def normalize_extraction(
     explanation = payload.get("diagram_explanation")
     explanation = (
         str(explanation).strip()
-        if isinstance(explanation, str) and explanation.strip()
+        if isinstance(explanation, str)
+        and explanation.strip()
+        and not is_schema_echo(explanation)
         else ""
     )
 
@@ -455,6 +553,30 @@ def normalize_extraction(
         warnings.append(
             "No readable structured text was found in this image. Try a sharper photo with "
             "better lighting or tighter cropping."
+        )
+
+    free_text = _string_values(payload)
+    echoed = [v for v in free_text if is_schema_echo(v)]
+    # "confidence": "high" and similar enum values are never real content.
+    real_content = [
+        v
+        for v in free_text
+        if v.strip()
+        and not is_schema_echo(v)
+        and v.strip().lower() not in VALID_CONFIDENCE
+        and not v.lstrip().startswith(
+            ("{", "flowchart", "graph", "mindmap", "erDiagram", "sequenceDiagram")
+        )
+    ]
+
+    if echoed and not real_content and diagram is None:
+        # Every free-text field came back as placeholder: the model described
+        # the schema instead of reading the image. Say so rather than showing
+        # empty panels as if the extraction were merely sparse.
+        warnings.append(
+            "The model returned the requested JSON template instead of reading the image, "
+            "so nothing could be reconstructed. Use a larger vision model "
+            "(Qwen/Qwen2-VL-2B-Instruct) or a clearer image."
         )
 
     return Extraction(

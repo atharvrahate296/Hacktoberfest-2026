@@ -1,7 +1,8 @@
 """Scribble2Structure -- from messy thinking to structured knowledge.
 
-FastAPI app: validation, Hugging Face Gemma inference route, transformation mode
-routing, sample gallery endpoint, and structured knowledge responses.
+FastAPI app: validation, local Hugging Face vision-language model inference,
+transformation mode routing, sample gallery endpoint, and structured knowledge
+responses.
 """
 
 from __future__ import annotations

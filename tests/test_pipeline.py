@@ -1,21 +1,24 @@
-"""End-to-end pipeline test with mocked Hugging Face inference.
+"""End-to-end pipeline test with a scripted local model.
 
 Proves the whole path -- validate -> infer -> normalize -> JSON payload the UI
-consumes -- without a real network call.
+consumes -- without downloading model weights.
 """
+
+from __future__ import annotations
 
 import io
 import json
 
 import pytest
-import requests
 from fastapi.testclient import TestClient
 
-from app import main
+from app import ai_client, main
+
+from conftest import reply_json
 
 client = TestClient(main.app)
 
-REALISTIC_RESPONSE = json.dumps(
+REALISTIC_RESPONSE = reply_json(
     {
         "title": "Cache Invalidation Strategy",
         "detected_mode": "flowchart",
@@ -61,8 +64,7 @@ REALISTIC_RESPONSE = json.dumps(
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "hf_test_token_12345")
-    monkeypatch.setenv("HF_MODEL_ID", "google/gemma-3-27b-it")
-    monkeypatch.delenv("HF_ENDPOINT_URL", raising=False)
+    monkeypatch.setenv("HF_MODEL_ID", "HuggingFaceTB/SmolVLM-500M-Instruct")
 
 
 def _png_bytes():
@@ -73,20 +75,22 @@ def _png_bytes():
     return buf.getvalue()
 
 
-class TestEndToEndPipeline:
+class TestMetadataEndpoints:
     def test_health_endpoint(self):
         resp = client.get("/api/health")
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
         assert data["api_key"] == "present"
-        assert "gemma" in data["model"].lower()
+        assert data["model"] == ai_client.DEFAULT_MODEL
+        assert data["endpoint"] == "local"
 
-    def test_config_endpoint(self):
+    def test_config_endpoint_reports_the_configured_model(self):
         resp = client.get("/api/config")
         assert resp.status_code == 200
         data = resp.json()
         assert data["api_key_present"] is True
+        assert data["model"] == ai_client.DEFAULT_MODEL
         assert "modes" in data
         assert "auto" in data["modes"]
 
@@ -96,21 +100,13 @@ class TestEndToEndPipeline:
         samples = resp.json()
         assert len(samples) >= 6
         modes = [s["mode"] for s in samples]
-        assert "notes" in modes
-        assert "flowchart" in modes
-        assert "architecture" in modes
-        assert "mindmap" in modes
-        assert "actions" in modes
-        assert "er" in modes
+        for mode in ("notes", "flowchart", "architecture", "mindmap", "actions", "er"):
+            assert mode in modes
 
-    def test_analyze_end_to_end(self, monkeypatch):
-        def fake_post(url, headers=None, data=None, timeout=None):
-            r = requests.Response()
-            r.status_code = 200
-            r._content = json.dumps({"choices": [{"message": {"content": REALISTIC_RESPONSE}}]}).encode()
-            return r
 
-        monkeypatch.setattr(requests, "post", fake_post)
+class TestEndToEndPipeline:
+    def test_analyze_end_to_end(self, client_env):
+        model, _ = client_env(replies=[REALISTIC_RESPONSE])
 
         files = {"image": ("board.png", _png_bytes(), "image/png")}
         resp = client.post("/api/analyze", files=files, data={"mode": "auto"})
@@ -128,4 +124,41 @@ class TestEndToEndPipeline:
         assert len(payload["uncertain_text"]) == 1
         assert len(payload["suggestions"]) == 1
         assert payload["source"]["filename"] == "board.png"
-        assert payload["telemetry"]["model"] == "google/gemma-3-27b-it"
+        assert payload["telemetry"]["model"] == "HuggingFaceTB/SmolVLM-500M-Instruct"
+        assert payload["telemetry"]["elapsed_ms"] >= 0
+        assert len(model.generate_calls) == 1
+
+    def test_inference_error_becomes_502(self, client_env):
+        client_env(error=RuntimeError("CUDA out of memory"))
+
+        files = {"image": ("board.png", _png_bytes(), "image/png")}
+        resp = client.post("/api/analyze", files=files, data={"mode": "auto"})
+        assert resp.status_code == 502
+        assert "out of memory" in resp.json()["detail"]
+
+    def test_bad_upload_is_rejected_before_inference(self, client_env):
+        model, _ = client_env(replies=[REALISTIC_RESPONSE])
+
+        files = {"image": ("board.png", b"not an image at all", "image/png")}
+        resp = client.post("/api/analyze", files=files, data={"mode": "auto"})
+        assert resp.status_code == 400
+        assert model.generate_calls == []
+
+
+class TestDiagramValidationIsServerSide:
+    def test_invalid_mermaid_is_omitted_but_notes_survive(self, client_env):
+        payload = {
+            "title": "Bad Diagram",
+            "notes": [{"heading": "H", "content": ["C"]}],
+            "diagram": {"type": "flowchart", "mermaid": "flowchart TD\n    A[Unclosed --> B"},
+        }
+        client_env(replies=[json.dumps(payload), "flowchart TD\n    still ] broken"])
+
+        files = {"image": ("board.png", _png_bytes(), "image/png")}
+        resp = client.post("/api/analyze", files=files, data={"mode": "flowchart"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["diagram"] is None
+        assert len(data["notes"]) == 1
+        assert data["telemetry"]["diagram_attempts"] == 2
+        assert data["warnings"]

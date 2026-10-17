@@ -9,5 +9,7 @@ __pycache__/
 htmlcov/
 .DS_Store
 *.log
+live_result.json
+capture_output.png
 /node_modules
 node_modules

@@ -123,6 +123,89 @@ class TestNormalizeExtraction:
         assert len(ext.suggestions) == 1
         assert len(ext.uncertain_text) == 1
 
+
+class TestSchemaEchoRejection:
+    """A model that repeats the prompt's template has not read the image."""
+
+    ECHOED = {
+        "title": "Short descriptive title of the content",
+        "detected_mode": "notes|flowchart|mindmap|architecture|actions|concept|er",
+        "summary": "1-3 sentence summary of the source content",
+        "notes": [
+            {
+                "heading": "Section heading",
+                "content": ["Statement or bullet point 1", "Statement or bullet point 2"],
+                "confidence": "high",
+            }
+        ],
+        "takeaways": ["Key takeaway, concept, or confirmed decision"],
+        "action_items": [{"task": "Explicit task statement", "owner": None, "deadline": None}],
+        "uncertain_text": [
+            {
+                "text_or_location": "Fragment or region that is illegible or ambiguous",
+                "reason": "Why it is uncertain (e.g. smudged, illegible handwriting, cut off)",
+            }
+        ],
+        "diagram": {
+            "type": "flowchart|mindmap|erDiagram|sequenceDiagram",
+            "mermaid": "Raw Mermaid syntax (no ``` code fences)",
+        },
+        "diagram_explanation": "What relationships or flow the diagram shows",
+        "suggestions": [
+            "AI suggestion or recommended next step (clearly distinguished from source content)"
+        ],
+    }
+
+    def test_echoed_fields_are_dropped(self):
+        ext = validation.normalize_extraction(dict(self.ECHOED), requested_mode="auto")
+        assert ext.title == "Untitled Extraction"
+        assert ext.summary == ""
+        assert ext.notes == []
+        assert ext.takeaways == []
+        assert ext.action_items == []
+        assert ext.uncertain_text == []
+        assert ext.suggestions == []
+        assert ext.diagram is None
+        assert ext.detected_mode is None
+
+    def test_echoed_payload_is_reported_as_a_failed_read(self):
+        ext = validation.normalize_extraction(dict(self.ECHOED), requested_mode="auto")
+        assert any("JSON template" in w for w in ext.warnings)
+
+    def test_real_content_alongside_an_echo_is_kept(self):
+        payload = dict(self.ECHOED)
+        payload["title"] = "OS Process State Model"
+        payload["summary"] = "Five-state lifecycle for a scheduled process."
+        payload["takeaways"] = ["A waiting process returns to the ready queue."]
+        ext = validation.normalize_extraction(payload, requested_mode="flowchart")
+        assert ext.title == "OS Process State Model"
+        assert ext.summary.startswith("Five-state")
+        assert ext.takeaways == ["A waiting process returns to the ready queue."]
+        assert not any("JSON template" in w for w in ext.warnings)
+
+    def test_detected_mode_must_be_a_real_mode(self):
+        for bogus in ("notes|flowchart", "chart", "FLOWCHART!", "", "auto"):
+            payload = {"title": "T", "detected_mode": bogus, "notes": [{"heading": "H", "content": ["C"]}]}
+            ext = validation.normalize_extraction(payload, requested_mode="auto")
+            assert ext.detected_mode is None, bogus
+
+    def test_detected_mode_accepts_a_real_mode(self):
+        payload = {"title": "T", "detected_mode": "Mindmap", "notes": []}
+        ext = validation.normalize_extraction(payload, requested_mode="auto")
+        assert ext.detected_mode == "mindmap"
+
+    def test_requested_mode_is_the_fallback(self):
+        payload = {"title": "T", "notes": []}
+        ext = validation.normalize_extraction(payload, requested_mode="er")
+        assert ext.detected_mode == "er"
+
+    def test_is_schema_echo_helper(self):
+        assert validation.is_schema_echo("1-3 sentence summary of the source content")
+        assert validation.is_schema_echo("  Key takeaway, concept, or confirmed decision  ")
+        assert validation.is_schema_echo("high|medium|low")
+        assert not validation.is_schema_echo("New process enters the ready queue.")
+        assert not validation.is_schema_echo("")
+
     def test_extract_json_object_from_fenced_and_prose(self):
         text = """Here is the result:
         ```json

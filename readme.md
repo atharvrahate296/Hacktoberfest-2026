@@ -2,111 +2,176 @@
 
 **From messy visual thinking to structured, editable knowledge.**
 
-Scribble2Structure transforms handwritten notes, whiteboard photographs, brainstorming sketches, technical system drawings, and meeting notes into structured, editable knowledge artifacts with rendered Mermaid diagrams, verifiable action plans, and multi-format exports.
+Scribble2Structure turns handwritten notes, whiteboard photographs, brainstorming
+sketches, technical system drawings and meeting notes into structured artifacts with
+rendered Mermaid diagrams, verifiable action plans and multi-format exports.
 
-Powered by **local multimodal AI inference** using **Qwen2-VL** (or Google Gemma) models via **Hugging Face Transformers** — no cloud API costs, runs fully on your machine.
+Inference runs **entirely on your own machine** through Hugging Face Transformers. There is
+no inference API, no per-request cost, and no image ever leaves the device.
+
+---
+
+## Choosing a model that fits your laptop
+
+Extraction quality scales with the model, and the model you can run is bounded by the
+memory your machine actually has. **This project is designed around that constraint:** the
+same codebase runs a 1 GB model on an entry-level laptop and a 9 GB model on a workstation,
+with no code changes — only the `HF_MODEL_ID` value in `.env`.
+
+| `HF_MODEL_ID` | Download | Fits comfortably on | Quality |
+| --- | --- | --- | --- |
+| `HuggingFaceTB/SmolVLM-500M-Instruct` *(default)* | ~1 GB | 4 GB VRAM, or CPU-only | Runs anywhere; weakest extraction. Useful for wiring and layout checks. |
+| `Qwen/Qwen2-VL-2B-Instruct` | ~4 GB | 8 GB VRAM, or 4 GB VRAM with CPU offload | **Recommended.** Best quality-to-footprint ratio; the practical default for real use. |
+| `Qwen/Qwen2.5-VL-3B-Instruct` | ~6 GB | 8–12 GB VRAM | Better on dense handwriting and multi-box diagrams. |
+| `google/gemma-3-4b-it` | ~9 GB | 12–16 GB VRAM | Highest accuracy; gated on Hugging Face, requires accepting the licence. |
+
+### How memory is handled at runtime
+
+`app/ai_client.py` sizes the model to the hardware instead of assuming one target:
+
+- **CUDA available** → the model is placed on the GPU in `float16` for speed. If it does not
+  fit in VRAM, it retries with `device_map="auto"` under a **3 GiB VRAM ceiling**, letting
+  `accelerate` offload the overflow to system RAM instead of raising an out-of-memory error.
+- **No CUDA** → `float32` on CPU. Slower, but no special hardware required.
+- **Model choice is yours, at runtime** — the id is read from the environment on every
+  request, so switching models needs only an edit to `.env` and a restart. Weights are cached
+  in `~/.cache/huggingface` after the first run.
 
 ---
 
 ## Features
 
-- **Local Multimodal AI Inference**: Runs vision-language models entirely on your machine using HuggingFace Transformers. Default model: `Qwen/Qwen2-VL-2B-Instruct` (~4 GB). Compatible with `Qwen2.5-VL-3B`, `SmolVLM`, and `google/gemma-3-4b-it`.
-- **8 Transformation Modes**:
-  1. **Auto Detect** — Adaptive layout & content classifier that selects the optimal mode automatically.
-  2. **Handwritten Notes to Structured Notes** — Transcribes handwriting, outlines headings, key concepts, formulas, and definitions.
-  3. **Diagram to Flowchart** — Detects steps, arrows, decision points, and generates editable Mermaid flowcharts.
-  4. **Brainstorming to Mind Map** — Extracts core themes, categories, radiating ideas, and generates Mermaid mindmaps.
-  5. **Technical Diagram to Architecture Document** — Identifies tiers, services, protocols, databases, caches, and generates system architecture diagrams.
-  6. **Meeting Notes to Action Plan** — Extracts decisions, confirmed tasks, owners, and deadlines without hallucinating missing data.
-  7. **Scientific Concept Map** — Preserves mathematical equations, scientific laws, symbols, units, and concept hierarchies.
-  8. **Database ER Diagram** — Extracts relational entities, attributes, PK/FK flags, cardinalities, Mermaid ER diagrams, and SQL table definitions (`CREATE TABLE`).
-- **Interactive Mermaid Diagrams**: Visual rendering using Mermaid.js (`flowchart`, `graph`, `mindmap`, `sequenceDiagram`, `erDiagram`), live diagram editor, and `.mmd` download.
-- **Side-by-Side Comparison**: Compare the original uploaded whiteboard/notes image against the extracted structured knowledge and rendered diagram.
-- **Editable Knowledge & State Management**: Live in-browser editing of titles, executive summaries, notes, action item checkboxes, and diagrams with clean reset and unsaved-changes protection.
-- **Multi-Format Exports**: One-click download as **Markdown (`.md`)**, **Plain Text (`.txt`)**, **Structured JSON (`.json`)**, and **Mermaid (`.mmd`)**.
-- **Interactive Sample Inputs Gallery**: Includes 6 realistic visual assets covering every transformation mode for zero-effort evaluation.
-- **Robust Security**: API tokens remain strictly server-side; input validation rejects oversized or corrupt files, corrects EXIF orientation, and treats model outputs safely without arbitrary code execution.
+- **Local, model-flexible inference** — any of the vision-language models above, selected by
+  your available memory; automatic CPU/GPU placement with graceful offload.
+- **Reconstruction as the deliverable** — diagrams, notes and action plans are rebuilt as
+  editable artifacts rather than described in prose.
+- **8 transformation modes**:
+  1. **Auto Detect** — picks the best mode from the image's layout and content.
+  2. **Handwritten Notes → Structured Notes** — headings, bullets, concepts, formulas.
+  3. **Diagram → Flowchart** — nodes, labels, arrows and decision paths as Mermaid.
+  4. **Brainstorming → Mind Map** — themes, categories and radiating ideas as Mermaid.
+  5. **Technical Diagram → Architecture** — tiers, services, protocols, storage, data flow.
+  6. **Meeting Notes → Action Plan** — decisions, tasks, owners and deadlines, with no invented facts.
+  7. **Scientific Concept Map** — equations, symbols, units and relationships preserved.
+  8. **Database ER Diagram** — entities, attributes, PK/FK, cardinalities, plus SQL `CREATE TABLE`.
+- **Rendered Mermaid with a live editor** — `flowchart`, `graph`, `mindmap`,
+  `sequenceDiagram` and `erDiagram`; edit the source and re-render in place; export `.mmd` or `.svg`.
+- **Side-by-side comparison** — the uploaded image next to the reconstructed diagram.
+- **Editable output with state management** — live editing of titles, summaries, notes,
+  action items and diagrams, with reset and unsaved-change protection.
+- **Multi-format exports** — Markdown, plain text, JSON, Mermaid and SVG.
+- **Sample gallery** — six generated inputs, one per diagram-oriented mode, for zero-effort evaluation.
 
 ---
 
-## Installation & Setup
+## Implementation
 
-### Prerequisites
+### Pipeline
+
+```
+upload → validate → prompt → generate → repair → normalize → render
+         │                       │         │          │
+    magic bytes,           image +     JSON retry,   schema-echo
+    size, EXIF,            mode prompt Mermaid retry rejection
+    pixel ceiling
+```
+
+1. **Validation** (`app/validation.py`) — the file's leading bytes are checked against real
+   image signatures, not the browser-supplied content type; extension, declared MIME and
+   actual format must agree. Size, megapixel ceiling and EXIF orientation are handled before
+   any inference cost is incurred.
+2. **Prompting** (`app/prompts.py`) — a mode-specific system prompt plus the full JSON schema.
+   Instructions state that the image is data, never instructions.
+3. **Inference** (`app/ai_client.py`) — the model is loaded once into a thread-safe singleton.
+   Placement is attempted GPU-first, then via `device_map="auto"` with memory ceilings; the
+   architecture declared by the checkpoint decides which model class is used.
+4. **Corrective retries** — one retry when the reply is not parseable JSON, and one retry when
+   the generated Mermaid fails validation. Both are text-only follow-ups.
+5. **Normalization** (`app/validation.py`) — arbitrary model JSON is coerced into a
+   renderable `Extraction`. Never raises: missing fields degrade to empty, so notes survive
+   even when the diagram does not. Values that merely echo the prompt's own template are
+   discarded rather than displayed as extracted content.
+6. **Diagram validation** (`app/diagram.py`) — fences and prose are stripped, script-like
+   markup is rejected, then supported type, size, bracket/quote balance and node-label
+   bracketing are checked before Mermaid ever reaches the browser.
+7. **Rendering** (`static/index.html`) — Mermaid.js draws the diagram; every model string is
+   HTML-escaped before insertion, and each render uses a unique id so concurrent draws cannot
+   collide.
+
+### Fail-safe by design
+
+A hostile, broken or simply weak model response degrades instead of breaking the product:
+notes and takeaways survive a diagram failure, a rejected diagram falls back to showing its
+source in a code block, and a load failure is translated into an actionable message rather
+than a stack trace.
+
+---
+
+## Setup
+
+### 1. Prerequisites
 
 - Python 3.10+
-- **~4 GB free disk space** (for `Qwen/Qwen2-VL-2B-Instruct` weights, downloaded once on first run)
-- Hugging Face Access Token with read permissions (from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)) — needed only for the initial model download
-- *(Optional)* NVIDIA GPU with 4+ GB VRAM for fast inference; CPU works but is slower
+- Disk space for the chosen model (1–9 GB, see the table above)
+- A Hugging Face access token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens),
+  needed only to download weights the first time. Gated models additionally require accepting
+  their licence.
 
-### 1. Clone & Environment Setup
+### 2. Install
 
 ```bash
-git clone https://github.com/atharvrahate296/Hacktoberfest-2026.git
-cd Hacktoberfest-2026
+git clone https://github.com/rohan1252030019-netizen/scribble2structure.git
+cd scribble2structure
 
-# Create virtual environment
 python -m venv .venv
-# On Windows:
-.\.venv\Scripts\activate
-# On Linux / macOS:
-source .venv/bin/activate
+# Windows:      .\.venv\Scripts\activate
+# Linux/macOS:  source .venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment Variables
-
-Copy `.env.example` to `.env`:
+### 3. Configure
 
 ```bash
-cp .env.example .env
+cp .env.example .env      # Windows: copy .env.example .env
 ```
 
-Edit `.env` and provide your Hugging Face credentials:
-
 ```ini
-# Hugging Face access token — https://huggingface.co/settings/tokens
-# Only needed for the initial model weight download (gated models)
+# Hugging Face token - only needed for the first weight download
 HF_TOKEN=hf_your_actual_token_here
 
-# Local model to load (weights cached in ~/.cache/huggingface after first run)
-# ~4 GB:  Qwen/Qwen2-VL-2B-Instruct      (recommended, fast)
-# ~6 GB:  Qwen/Qwen2.5-VL-3B-Instruct    (better quality)
-# ~2 GB:  HuggingFaceTB/SmolVLM-Instruct  (smallest)
-# ~9 GB:  google/gemma-3-4b-it            (original plan)
-HF_MODEL_ID=Qwen/Qwen2-VL-2B-Instruct
+# Pick the model that matches your available memory (default shown)
+HF_MODEL_ID=HuggingFaceTB/SmolVLM-500M-Instruct
 
 # Optional image upload limit in MB (default: 10)
 MAX_UPLOAD_MB=10
 ```
 
----
-
-## Running the Application
-
-Start the local server using `uvicorn`:
+### 4. Run
 
 ```bash
 uvicorn app.main:app --host 127.0.0.1 --port 8090 --reload
 ```
 
-Open your browser to: **[http://127.0.0.1:8090](http://127.0.0.1:8090)**
+Open **http://127.0.0.1:8090**.
 
 ---
 
-## Sample Inputs Gallery
+## API
 
-The application includes 6 realistic image inputs in `samples/` for immediate testing:
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/health` | Readiness and the active model. `200` when runnable, `503` when weights are missing. |
+| `GET` | `/api/config` | Model id, upload limit, supported formats, available modes. |
+| `GET` | `/api/samples` | Sample gallery entries. |
+| `POST` | `/api/analyze` | `multipart/form-data` with `image` and `mode`. `400` on a bad upload, `502` on an inference failure. |
 
-1. **`01_ml_notes.png`** — Handwritten machine learning notes (gradient descent, cost function, L2 regularization).
-2. **`02_os_process.png`** — Operating system process state machine (New, Ready, Running, Waiting, Terminated).
-3. **`03_software_architecture.png`** — Microservices e-commerce system architecture with API gateway, Redis, and Kafka.
-4. **`04_student_productivity.png`** — Mind map of student productivity, study habits, and task management.
-5. **`05_meeting_notes.png`** — Sprint sync meeting notes with action items, assignees, and deadlines.
-6. **`06_database_er.png`** — Relational database schema with customer, orders, items, and products.
+---
 
-To re-generate or modify sample assets:
+## Samples
+
+Six generated inputs live in `samples/`, covering notes, flowcharts, architecture, mind maps,
+meeting notes and ER diagrams. Regenerate them with:
 
 ```bash
 python scripts/create_samples.py
@@ -114,53 +179,48 @@ python scripts/create_samples.py
 
 ---
 
-## Running Automated Tests
-
-Run the complete test suite:
+## Tests
 
 ```bash
 pytest
 ```
 
-The tests cover:
+The suite runs with no model download and no network. Only the tensor layer is faked
+(`tests/conftest.py`); prompt assembly, decoding, corrective retries, Mermaid validation,
+normalization and HTTP routing all execute for real.
 
-- Hugging Face Gemma inference client routing, error translation, rate-limit retries, and corrective repair routines (`tests/test_ai_client.py`).
-- Mermaid diagram parsing, sanitization, syntax validation, and repair for flowcharts, mindmaps, and ER diagrams (`tests/test_diagram.py`).
-- Upload validation (formats, EXIF orientation, size ceilings, corruption checks) and response normalization (`tests/test_validation.py`).
-- End-to-end FastAPI endpoint integration (`tests/test_pipeline.py`).
+- `tests/test_ai_client.py` — model selection, prompt assembly, decode, error translation, retries.
+- `tests/test_diagram.py` — Mermaid sanitization and validation.
+- `tests/test_validation.py` — upload integrity and response normalization, including template-echo rejection.
+- `tests/test_frontend.py` — frontend contracts: render targets exist, ids are unique, no hardcoded model.
+- `tests/test_pipeline.py` — end-to-end `/api/analyze`.
 
 ---
 
-## Architecture
+## Project structure
 
 ```
-.
-├── app/
-│   ├── __init__.py
-│   ├── ai_client.py       # Hugging Face Gemma multimodal client with retries
-│   ├── diagram.py         # Mermaid validation, sanitization, & repair (Flowchart, Mindmap, ER)
-│   ├── main.py            # FastAPI server routes, health check, config, and sample endpoints
-│   ├── prompts.py         # Mode-specific Gemma prompts & system instructions
-│   └── validation.py      # Upload integrity, EXIF transpose, & schema normalization
-├── samples/               # Usable sample input images
-├── scripts/
-│   └── create_samples.py  # Sample asset generator
-├── static/
-│   └── index.html         # Modern web application frontend
-├── tests/
-│   ├── test_ai_client.py  # Inference client unit tests
-│   ├── test_diagram.py    # Diagram validator tests
-│   ├── test_pipeline.py   # Full pipeline integration tests
-│   └── test_validation.py # Upload & normalization tests
-├── .env.example           # Environment template
-└── requirements.txt       # Project dependencies
+app/
+  ai_client.py    Local Hugging Face VLM client: load, place, generate, decode, repair
+  validation.py   Upload integrity, EXIF transpose, response normalization
+  diagram.py      Mermaid sanitization, validation, repair prompts
+  prompts.py      Mode-specific system prompts and the JSON schema
+  main.py         FastAPI routes
+static/index.html Frontend (Mermaid rendering, editors, exports)
+samples/          Sample input images
+scripts/          Sample generator
+tests/            Test suite and shared test doubles
 ```
 
 ---
 
-## Security & Reliability Considerations
+## Security & reliability
 
-- **Server-Side Secret Isolation**: `HF_TOKEN` is read exclusively on the server side and never sent to client code or exposed in public repositories.
-- **No Mock Responses**: Real Hugging Face Gemma inference is executed in all modes.
-- **Fail-Safe Diagrams**: Broken or untrusted diagrams never crash the application; unparseable source is displayed safely in fenced code blocks while preserving extracted notes and takeaways.
-- **No Arbitrary Code Execution**: Generated SQL, Python, or shell code is treated as text data and never executed.
+- **Secrets stay server-side.** `HF_TOKEN` is read only by the inference layer and is never
+  sent to the browser or committed; `.env` is gitignored.
+- **Uploads are inspected, not trusted.** Magic-byte sniffing, format agreement, size and
+  megapixel ceilings, and EXIF orientation correction.
+- **Model output is treated as data.** Generated SQL, Mermaid and prose are never executed.
+  Script-like markup in a diagram is rejected, and all rendered text is HTML-escaped.
+- **No mocked responses in the product.** The real model runs in every mode; only the test
+  suite substitutes fakes.
