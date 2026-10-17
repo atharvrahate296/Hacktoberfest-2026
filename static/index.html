@@ -162,6 +162,7 @@ padding:6px;box-shadow:0 12px 32px rgba(20,22,28,.1);display:flex;flex-direction
 @keyframes spin{to{transform:rotate(360deg)}}
 .loading{text-align:center;padding:18vh 20px 0;color:var(--mut)}
 .loading strong{display:block;color:var(--ink);font-size:17px;margin:16px 0 4px}
+.loading .elapsed{font-family:var(--mono);font-size:13px;color:var(--mut);margin-top:10px}
 
 .modal{position:fixed;inset:0;background:rgba(15,17,22,.78);z-index:99;display:none;align-items:center;justify-content:center;padding:24px}
 .modal img{max-width:92vw;max-height:90vh;object-fit:contain;border-radius:12px}
@@ -222,7 +223,7 @@ padding:6px;box-shadow:0 12px 32px rgba(20,22,28,.1);display:flex;flex-direction
       <div id="samplesGrid"></div>
     </div>
 
-    <p class="fine">Runs locally on your own machine (<span id="modelFootnote">a vision-language model</span>). Check the results before relying on them.</p>
+    <p class="fine">Images are sent to Google's Gemini API and analysed in the cloud by <span id="modelFootnote">a vision-language model</span>. Check the results before relying on them.</p>
   </aside>
 
   <section class="work" id="workSection">
@@ -246,6 +247,10 @@ const esc = s => (s == null ? "" : String(s)).replace(/[&<>"']/g, c => ({"&":"&a
 const EMPTY = `<div class="empty"><h2>Turn scribbles into structure</h2><p>Add a photo of handwritten notes, a whiteboard or a diagram, then choose Analyze image.</p></div>`;
 
 mermaid.initialize({startOnLoad:false, securityLevel:"strict", theme:"neutral",
+  // Native <text> labels instead of <foreignObject>: browsers do not draw
+  // foreignObject content when an SVG is loaded as an <img>, so the PNG export
+  // would come out with empty boxes. Costs slightly looser label wrapping.
+  htmlLabels:false,
   themeVariables:{fontFamily:"DM Sans, system-ui, sans-serif", primaryColor:"#eef0ff", primaryBorderColor:"#3a4ff0", lineColor:"#6b7280", fontSize:"14px"}});
 
 let selectedFile = null, originalResult = null, currentResult = null;
@@ -270,8 +275,8 @@ fetch("/api/config").then(r => r.json()).then(c => {
   }
   if (c.max_mb) $("maxMb").textContent = c.max_mb;
   if (!c.api_key_present) {
-    $("tokenTag").textContent = "Model not ready"; $("tokenTag").className = "pill token-warn";
-    banner("warn", `<strong>Model weights not found.</strong><span>Add <code>HF_TOKEN</code> to your <code>.env</code> file (create one at <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">huggingface.co/settings/tokens</a>), then restart the app.</span>`);
+    $("tokenTag").textContent = "API key missing"; $("tokenTag").className = "pill token-warn";
+    banner("warn", `<strong>No Gemini API key.</strong><span>Add <code>GEMINI_API_KEY</code> to your <code>.env</code> file (create a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>), then restart the app.</span>`);
   }
 }).catch(() => {});
 
@@ -341,11 +346,25 @@ $("runBtn").onclick = async () => {
   $("runBtn").disabled = true;
   $("runBtn").innerHTML = `<span class="spinner"></span>Analyzing…`;
   $("out").innerHTML = `<div class="loading"><span class="spinner"></span><strong>Reading your image…</strong>
-    <div>Running the local model. The first run can take a few minutes.</div></div>`;
+    <div>Calling the Gemini API. A slow model can take a couple of minutes.</div>
+    <div class="elapsed" id="elapsed">0.0s</div>
+    <button class="btn sm" id="cancelBtn" style="margin-top:14px">Cancel</button></div>`;
+
+  // Inference can legitimately take minutes, so show the clock and let the
+  // user give up rather than staring at a spinner that looks frozen.
+  const startedAt = performance.now();
+  const elapsedEl = $("elapsed");
+  const tick = setInterval(() => {
+    if (elapsedEl) elapsedEl.textContent = ((performance.now() - startedAt) / 1000).toFixed(1) + "s";
+  }, 100);
+
+  const controller = new AbortController();
+  $("cancelBtn").onclick = () => controller.abort();
+
   const fd = new FormData();
   fd.append("image", selectedFile); fd.append("mode", $("modeSelect").value);
   try {
-    const res = await fetch("/api/analyze", {method:"POST", body:fd});
+    const res = await fetch("/api/analyze", {method:"POST", body:fd, signal: controller.signal});
     const data = await res.json().catch(() => ({detail: res.statusText}));
     if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`);
     ["notes","takeaways","action_items","uncertain_text","suggestions","warnings"].forEach(k => data[k] = data[k] || []);
@@ -357,10 +376,13 @@ $("runBtn").onclick = async () => {
     activeTab = first ? first[0] : "notes";
     paintResult();
   } catch (err) {
-    $("out").innerHTML = `<div class="banner bad"><strong>Analysis failed</strong><span>${esc(err.message)}</span>
+    const aborted = err.name === "AbortError";
+    $("out").innerHTML = `<div class="banner bad"><strong>${aborted ? "Cancelled" : "Analysis failed"}</strong>
+      <span>${esc(aborted ? "Stopped waiting for the server. The model may still be running on it." : err.message)}</span>
       <button class="btn sm" id="retryBtn">Try again</button></div>`;
     $("retryBtn").onclick = () => $("runBtn").click();
   } finally {
+    clearInterval(tick);
     $("runBtn").disabled = false; $("runBtn").textContent = "Analyze image";
   }
 };
@@ -459,6 +481,7 @@ function renderTab(d){
       <div class="tools">
         <button class="btn" id="toggleEditorBtn">Edit source</button>
         <button class="btn" id="copyMmdBtn">Copy source</button>
+        <button class="btn" id="dlPngBtn">Download PNG</button>
         <button class="btn" id="dlSvgBtn">Download SVG</button>
         <button class="btn" id="dlMmdBtn">Download .mmd</button>
       </div>
@@ -501,10 +524,12 @@ function mountExports(){
   const d = currentResult;
   const slug = (d.title || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "scribble-structure";
   $("exportsBar").innerHTML = `
+    <button id="pngDl">Download image (.png)</button>
     <button id="mdDl">Download Markdown</button><button id="txtDl">Download text</button><button id="jsonDl">Download JSON</button>
     ${d.diagram ? `<button id="mmdDl">Download Mermaid</button>` : ""}<hr>
     <button id="copyNotesBtn">Copy notes</button><button id="copyMdBtn">Copy Markdown</button>`;
   $("exportsBar").onclick = () => $("exportMenu").removeAttribute("open");
+  $("pngDl").onclick = () => downloadShareImage(d, slug);
   $("mdDl").onclick = () => downloadFile(`${slug}.md`, generateMarkdown(d), "text/markdown");
   $("txtDl").onclick = () => downloadFile(`${slug}.txt`, generatePlainText(d));
   $("jsonDl").onclick = () => downloadFile(`${slug}.json`, JSON.stringify(d, null, 2), "application/json");
@@ -521,16 +546,17 @@ function mountExports(){
   };
   if ($("dlMmdBtn")) $("dlMmdBtn").onclick = () => downloadFile(`${slug}.mmd`, d.diagram.mermaid);
   if ($("dlSvgBtn")) $("dlSvgBtn").onclick = () => {
-    const svg = document.querySelector("#mmdMain svg") || document.querySelector("#sideMmd svg");
+    const svg = liveSvg();
     if (!svg) { alert("The diagram hasn't been drawn yet."); return; }
-    downloadFile(`${slug}.svg`, svg.outerHTML, "image/svg+xml");
+    downloadFile(`${slug}.svg`, standaloneSvg(svg), "image/svg+xml");
   };
+  if ($("dlPngBtn")) $("dlPngBtn").onclick = () => downloadDiagramPng(slug);
   if ($("copyMmdBtn")) $("copyMmdBtn").onclick = () => copyToClipboard(d.diagram.mermaid, "Mermaid source copied");
   if ($("copySqlBtn")) $("copySqlBtn").onclick = () => copyToClipboard(d.sql_schema, "SQL copied");
 }
 
 function generateMarkdown(d){
-  const L = [`# ${d.title}`, "", `*Made with Scribble2Structure using ${d.telemetry?.model || "a local vision-language model"}*`, ""];
+  const L = [`# ${d.title}`, "", `*Made with Scribble2Structure using ${d.telemetry?.model || "a vision-language model"}*`, ""];
   if (d.summary) L.push("## Summary", "", d.summary, "");
   if (d.notes.length) { L.push("## Notes", ""); d.notes.forEach(n => { L.push(`### ${n.heading} (${n.confidence})`); n.content.forEach(c => L.push(`- ${c}`)); L.push(""); }); }
   if (d.takeaways.length) { L.push("## Key takeaways", ""); d.takeaways.forEach((t, i) => L.push(`${i + 1}. ${t}`)); L.push(""); }
@@ -559,6 +585,334 @@ function generatePlainText(d){
 function downloadFile(name, content, type = "text/plain"){
   const url = URL.createObjectURL(new Blob([content], {type}));
   const a = document.createElement("a"); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
+}
+
+function liveSvg(){
+  return document.querySelector("#mmdMain svg") || document.querySelector("#sideMmd svg");
+}
+
+// Mermaid emits a DOM fragment with CSS-driven sizing; it only renders
+// standalone once it carries a namespace and explicit pixel dimensions.
+function standaloneSvg(svg, bg = "#ffffff"){
+  const box = svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width
+    ? { w: svg.viewBox.baseVal.width, h: svg.viewBox.baseVal.height }
+    : { w: svg.width.baseVal.value || 800, h: svg.height.baseVal.value || 600 };
+
+  const clone = svg.cloneNode(true);
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  clone.setAttribute("width", Math.ceil(box.w));
+  clone.setAttribute("height", Math.ceil(box.h));
+  clone.removeAttribute("style");
+  const bgRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  bgRect.setAttribute("x", 0); bgRect.setAttribute("y", 0);
+  bgRect.setAttribute("width", Math.ceil(box.w)); bgRect.setAttribute("height", Math.ceil(box.h));
+  bgRect.setAttribute("fill", bg);
+  clone.insertBefore(bgRect, clone.firstChild);
+  return { markup: new XMLSerializer().serializeToString(clone), width: box.w, height: box.h };
+}
+
+async function downloadDiagramPng(slug, scale = 2){
+  const svg = liveSvg();
+  if (!svg) { alert("The diagram hasn't been drawn yet."); return; }
+  const { markup, width, height } = standaloneSvg(svg);
+  // Cap the raster: a wide ER diagram at 2x can exceed canvas limits.
+  const s = Math.max(1, Math.min(scale, 12000 / Math.max(width, height)));
+  const blob = new Blob([markup], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(width * s);
+    canvas.height = Math.ceil(height * s);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    await new Promise(res => canvas.toBlob(b => {
+      if (!b) { toast("Could not build the PNG"); return res(); }
+      const out = URL.createObjectURL(b);
+      const a = document.createElement("a");
+      a.href = out; a.download = `${slug || "diagram"}.png`; a.click();
+      URL.revokeObjectURL(out);
+      toast("Diagram saved as PNG");
+      res();
+    }, "image/png"));
+  } catch (e) {
+    toast("PNG export failed — use Download SVG instead");
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Share image: deterministic rendering of the extraction to a PNG.
+//
+// Text is drawn with the canvas 2D API rather than generated by a model, so
+// formulas, variable names and identifiers come out exactly as extracted. No
+// external dependency, no font file to ship, and it works offline.
+// ---------------------------------------------------------------------------
+
+const CARD = {
+  w: 1080, pad: 64, scale: 2,
+  sans: '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif',
+  mono: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',
+  ink: "#15171c", mut: "#6b7280", line: "#e7e9ee", acc: "#3a4ff0",
+  card: "#ffffff", bg: "#f6f7f9", accSoft: "#eef0ff",
+  // Caps so a runaway extraction cannot produce a canvas the browser refuses.
+  maxNotes: 30, maxItems: 25, maxSqlLines: 50, maxHeight: 12000,
+};
+
+function wrapText(ctx, text, maxWidth, font){
+  ctx.font = font;
+  const words = String(text == null ? "" : text).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = "";
+  for (const word of words){
+    const probe = line ? line + " " + word : word;
+    if (ctx.measureText(probe).width <= maxWidth || !line) line = probe;
+    else { lines.push(line); line = word; }
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : [""];
+}
+
+function roundRect(ctx, x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// Measures every block first so the canvas is only as tall as it needs to be.
+function planCard(d){
+  const m = document.createElement("canvas").getContext("2d");
+  const W = CARD.w, inner = W - CARD.pad * 2;
+  const fTitle = `600 40px ${CARD.sans}`;
+  const fMeta = `13px ${CARD.sans}`;
+  const fH = `600 20px ${CARD.sans}`;
+  const fBody = `19px ${CARD.sans}`;
+  const fMono = `17px ${CARD.mono}`;
+  const fFoot = `13px ${CARD.sans}`;
+
+  const blocks = [];
+  const add = (o) => { blocks.push(o); return o; };
+
+  add({ type: "title", lines: wrapText(m, d.title || "Extraction", inner, fTitle), font: fTitle, gap: 10 });
+
+  const bits = [];
+  if (d.detected_mode) bits.push(d.detected_mode);
+  else if (d.mode && d.mode !== "auto") bits.push(d.mode);
+  if (d.source && d.source.filename) bits.push(d.source.filename);
+  add({ type: "meta", lines: [bits.join("  ·  ")], font: fMeta, gap: 26 });
+
+  if (d.summary) add({ type: "text", text: d.summary, font: fBody, gap: 26 });
+
+  (d.notes || []).slice(0, CARD.maxNotes).forEach(n => add({
+    type: "note",
+    heading: n.heading || "Notes",
+    confidence: n.confidence || "",
+    items: (n.content || []).slice(0, CARD.maxItems),
+    font: fBody, gap: 16,
+  }));
+
+  if ((d.takeaways || []).length) add({
+    type: "list", title: "Key takeaways", numbered: true,
+    items: d.takeaways.slice(0, CARD.maxItems), font: fBody, gap: 16,
+  });
+
+  if ((d.action_items || []).length) add({
+    type: "list", title: "Action plan", checks: true,
+    items: d.action_items.slice(0, CARD.maxItems).map(a => ({
+      text: a.task,
+      meta: [a.owner ? "owner: " + a.owner : "unassigned", a.deadline ? "due: " + a.deadline : "not stated"].join(" · "),
+      done: !!a.done,
+    })), font: fBody, gap: 16,
+  });
+
+  if (d.sql_schema) add({
+    type: "code",
+    text: d.sql_schema.split("\n").slice(0, CARD.maxSqlLines).join("\n"),
+    font: fMono, gap: 16,
+  });
+
+  add({ type: "foot", lines: [
+    "Made with Scribble2Structure" + (d.telemetry && d.telemetry.model ? " · " + d.telemetry.model : ""),
+    "AI output — verify before use.",
+  ], font: fFoot, gap: 0 });
+
+  // Second pass: measure every block, then place as many as the canvas allows.
+// Blocks past maxHeight are dropped rather than drawn: a canvas the browser
+// refuses to allocate is worse than a card that shows less.
+  for (const b of blocks){
+    if (b.type === "title"){ b.h = b.lines.length * 46; }
+    else if (b.type === "foot"){ b.h = b.lines.length * 22 + 12; }
+    else if (b.type === "meta"){ b.h = 20; }
+    else if (b.type === "text"){ b.lines = wrapText(m, b.text, inner, b.font); b.h = b.lines.length * 30; }
+    else if (b.type === "note"){
+      b.headLines = wrapText(m, b.heading, inner - 60, fH);
+      b.itemLines = b.items.map(t => wrapText(m, t, inner - 74, b.font));
+      b.h = 18 + b.headLines.length * 28 + 14 + b.itemLines.reduce((s, l) => s + l.length * 29, 0) + 24;
+    }
+    else if (b.type === "list"){
+      b.titleLines = wrapText(m, b.title, inner, fH);
+      b.itemLines = b.items.map(it => {
+        const text = typeof it === "string" ? it : it.text;
+        const sub = typeof it === "string" ? "" : it.meta;
+        const lines = wrapText(m, text, inner - 70, b.font);
+        return { lines, sub, done: !!(typeof it === "object" && it.done) };
+      });
+      b.h = 14 + b.titleLines.length * 28 + 8 + b.itemLines.reduce((s, it) => s + it.lines.length * 29 + (it.sub ? 22 : 0) + 6, 0) + 16;
+    }
+    else if (b.type === "code"){
+      b.lines = wrapText(m, b.text, inner - 40, b.font);
+      b.h = 20 + b.lines.length * 26;
+    }
+  }
+
+  const foot = blocks[blocks.length - 1];
+  const reserve = (foot && foot.type === "foot") ? foot.h : 0;
+  const placed = [];
+  let y = CARD.pad, dropped = 0;
+  for (const b of blocks){
+    if (b.type === "foot") continue;
+    // Title and meta always fit; anything else yields to the cap.
+    const essential = b.type === "title" || b.type === "meta";
+    if (!essential && y + b.h + reserve > CARD.maxHeight){ dropped++; continue; }
+    b.y = y;
+    y += b.h + b.gap;
+    placed.push(b);
+  }
+  if (foot && foot.type === "foot"){
+    if (dropped > 0){
+      foot.lines = foot.lines.concat(`${dropped} later section(s) not shown — use the exports for the full result.`);
+      foot.h = foot.lines.length * 22 + 12;
+    }
+    foot.y = y;
+    y += foot.h;
+    placed.push(foot);
+  }
+  return { blocks: placed, height: Math.ceil(y + CARD.pad) };
+}
+
+function drawCard(ctx, plan, d){
+  const W = CARD.w, inner = W - CARD.pad * 2;
+  ctx.fillStyle = CARD.bg;
+  ctx.fillRect(0, 0, W, plan.height);
+
+  // Accent rule at the top.
+  ctx.fillStyle = CARD.acc;
+  ctx.fillRect(0, 0, W, 6);
+
+  for (const b of plan.blocks){
+    const y = b.y;
+    if (b.type === "title"){
+      ctx.fillStyle = CARD.ink;
+      ctx.font = b.font;
+      b.lines.forEach((l, i) => ctx.fillText(l, CARD.pad, y + 38 + i * 46));
+    }
+    else if (b.type === "meta"){
+      ctx.fillStyle = CARD.mut; ctx.font = b.font;
+      ctx.fillText(b.lines[0], CARD.pad, y + 14);
+    }
+    else if (b.type === "text"){
+      ctx.fillStyle = CARD.ink; ctx.font = b.font;
+      b.lines.forEach((l, i) => ctx.fillText(l, CARD.pad, y + 26 + i * 30));
+    }
+    else if (b.type === "note"){
+      ctx.fillStyle = CARD.card;
+      roundRect(ctx, CARD.pad, y, inner, b.h, 16); ctx.fill();
+      ctx.strokeStyle = CARD.line; ctx.lineWidth = 2; ctx.stroke();
+      let cy = y + 18;
+      ctx.fillStyle = CARD.ink; ctx.font = `600 20px ${CARD.sans}`;
+      b.headLines.forEach((l, i) => ctx.fillText(l, CARD.pad + 28, cy + 20 + i * 28));
+      if (b.confidence){
+        const label = b.confidence.toUpperCase();
+        ctx.font = `600 11px ${CARD.sans}`;
+        const w = ctx.measureText(label).width + 20;
+        const hx = CARD.pad + inner - 28 - w;
+        ctx.fillStyle = CARD.accSoft;
+        roundRect(ctx, hx, y + 20, w, 22, 11); ctx.fill();
+        ctx.fillStyle = CARD.acc;
+        ctx.fillText(label, hx + 10, y + 35);
+      }
+      cy += b.headLines.length * 28 + 14;
+      ctx.font = b.font;
+      b.itemLines.forEach(lines => {
+        ctx.fillStyle = CARD.acc;
+        ctx.beginPath(); ctx.arc(CARD.pad + 36, cy + 8, 4, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = CARD.ink;
+        lines.forEach((l, i) => ctx.fillText(l, CARD.pad + 54, cy + 14 + i * 29));
+        cy += lines.length * 29;
+      });
+    }
+    else if (b.type === "list"){
+      let cy = y + 14;
+      ctx.fillStyle = CARD.ink; ctx.font = `600 20px ${CARD.sans}`;
+      b.titleLines.forEach((l, i) => ctx.fillText(l, CARD.pad, cy + 20 + i * 28));
+      cy += b.titleLines.length * 28 + 8;
+      b.itemLines.forEach((it, idx) => {
+        ctx.font = b.font;
+        if (b.checks){
+          ctx.strokeStyle = it.done ? CARD.acc : CARD.line;
+          ctx.lineWidth = 2;
+          roundRect(ctx, CARD.pad + 2, cy + 2, 18, 18, 5); ctx.stroke();
+          if (it.done){
+            ctx.strokeStyle = CARD.acc;
+            ctx.beginPath();
+            ctx.moveTo(CARD.pad + 6, cy + 11); ctx.lineTo(CARD.pad + 10, cy + 15); ctx.lineTo(CARD.pad + 17, cy + 6);
+            ctx.stroke();
+          }
+        } else {
+          ctx.fillStyle = CARD.acc; ctx.font = `600 19px ${CARD.sans}`;
+          ctx.fillText(String(idx + 1) + ".", CARD.pad + 2, cy + 18);
+        }
+        ctx.fillStyle = CARD.ink; ctx.font = b.font;
+        it.lines.forEach((l, i) => ctx.fillText(l, CARD.pad + 32, cy + 18 + i * 29));
+        cy += it.lines.length * 29;
+        if (it.sub){
+          ctx.fillStyle = CARD.mut; ctx.font = `13px ${CARD.sans}`;
+          ctx.fillText(it.sub, CARD.pad + 32, cy + 14);
+          cy += 22;
+        }
+        cy += 6;
+      });
+    }
+    else if (b.type === "code"){
+      ctx.fillStyle = CARD.card;
+      roundRect(ctx, CARD.pad, y, inner, b.h, 14); ctx.fill();
+      ctx.strokeStyle = CARD.line; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = "#3b4252"; ctx.font = b.font;
+      b.lines.forEach((l, i) => ctx.fillText(l, CARD.pad + 20, y + 34 + i * 26));
+    }
+    else if (b.type === "foot"){
+      ctx.strokeStyle = CARD.line; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(CARD.pad, y + 4); ctx.lineTo(W - CARD.pad, y + 4); ctx.stroke();
+      ctx.fillStyle = CARD.mut; ctx.font = b.font;
+      b.lines.forEach((l, i) => ctx.fillText(l, CARD.pad, y + 30 + i * 20));
+    }
+  }
+}
+
+function downloadShareImage(d, slug){
+  const plan = planCard(d);
+  const canvas = document.createElement("canvas");
+  canvas.width = CARD.w * CARD.scale;
+  canvas.height = plan.height * CARD.scale;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(CARD.scale, CARD.scale);
+  drawCard(ctx, plan, d);
+  canvas.toBlob(blob => {
+    if (!blob) { toast("Could not build the image"); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `${slug || "extraction"}.png`; a.click();
+    URL.revokeObjectURL(url);
+    toast("Image saved");
+  }, "image/png");
 }
 async function copyToClipboard(text, msg){
   try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); toast(msg); return; } } catch (e) {}

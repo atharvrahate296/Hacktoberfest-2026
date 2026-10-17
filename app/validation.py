@@ -575,8 +575,8 @@ def normalize_extraction(
         # empty panels as if the extraction were merely sparse.
         warnings.append(
             "The model returned the requested JSON template instead of reading the image, "
-            "so nothing could be reconstructed. Use a larger vision model "
-            "(Qwen/Qwen2-VL-2B-Instruct) or a clearer image."
+            "so nothing could be reconstructed. Try a larger model "
+            "(GEMMA_MODEL=gemma-3-27b-it) or a clearer image."
         )
 
     return Extraction(

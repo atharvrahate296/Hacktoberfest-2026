@@ -1,25 +1,31 @@
-"""Local Hugging Face inference-client tests.
+"""Cloud Gemma inference-client tests.
 
-No weights are downloaded: the model/processor pair is scripted (see conftest)
-while prompt assembly, decoding, JSON repair, Mermaid validation, and telemetry
-run for real.
+No network and no API key are used: the transport is scripted (see conftest)
+while request assembly, config, error translation, JSON repair, Mermaid
+validation and telemetry all run for real.
 """
 
 from __future__ import annotations
 
+import io
 import json
+import pathlib
 
 import pytest
 
 from app import ai_client
 
-from conftest import reply_json
+from conftest import FakeAPIError, FakeResponse, part_texts, reply_json
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-@pytest.fixture(autouse=True)
-def env(monkeypatch):
-    monkeypatch.setenv("HF_TOKEN", "hf_test_token_12345")
-    monkeypatch.setenv("HF_MODEL_ID", "HuggingFaceTB/SmolVLM-500M-Instruct")
+def inline_parts(contents):
+    return [p.inline_data for c in contents for p in (c.parts or []) if p.inline_data]
+
+
+def text_parts(contents):
+    return part_texts(contents)
 
 
 class TestModelNaming:
@@ -27,126 +33,360 @@ class TestModelNaming:
         assert ai_client.DEFAULT_MODEL in ai_client.KNOWN_MODELS
 
     def test_model_id_follows_env(self, monkeypatch):
-        monkeypatch.setenv("HF_MODEL_ID", "Qwen/Qwen2-VL-2B-Instruct")
-        assert ai_client.model_id() == "Qwen/Qwen2-VL-2B-Instruct"
-        monkeypatch.delenv("HF_MODEL_ID")
+        monkeypatch.setenv("GEMMA_MODEL", "gemma-3-12b-it")
+        assert ai_client.model_id() == "gemma-3-12b-it"
+        monkeypatch.delenv("GEMMA_MODEL")
         assert ai_client.model_id() == ai_client.DEFAULT_MODEL
 
-    def test_endpoint_is_always_local(self):
-        assert ai_client.endpoint_url() is None
+    def test_model_id_accepts_the_google_standard_alias(self, monkeypatch):
+        monkeypatch.delenv("GEMMA_MODEL")
+        monkeypatch.setenv("GEMINI_MODEL", "gemma-3-4b-it")
+        assert ai_client.model_id() == "gemma-3-4b-it"
+
+    def test_model_chain_is_the_model_alone_by_default(self):
+        assert ai_client.model_chain() == [ai_client.DEFAULT_MODEL]
+
+    def test_model_chain_appends_fallbacks_without_duplicates(self, monkeypatch):
+        monkeypatch.setenv("GEMMA_MODEL_FALLBACKS", "gemma-3-12b-it, gemma-3-4b-it")
+        assert ai_client.model_chain() == [
+            "gemma-3-27b-it",
+            "gemma-3-12b-it",
+            "gemma-3-4b-it",
+        ]
+
+    def test_a_fallback_naming_the_primary_is_not_repeated(self, monkeypatch):
+        monkeypatch.setenv("GEMMA_MODEL_FALLBACKS", "gemma-3-27b-it")
+        assert ai_client.model_chain() == [ai_client.DEFAULT_MODEL]
+
+    def test_endpoint_is_the_gemini_api(self):
+        assert ai_client.endpoint_url() == (
+            "https://generativelanguage.googleapis.com/v1beta"
+        )
+
+    def test_endpoint_honours_overrides(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_BASE_URL", "https://proxy.example/")
+        monkeypatch.setenv("GEMINI_API_VERSION", "v1alpha")
+        assert ai_client.endpoint_url() == "https://proxy.example/v1alpha"
+
+    def test_known_models_are_all_vision_capable(self):
+        """The 1B Gemma 3 size is text-only and would fail on every upload."""
+        assert "gemma-3-1b-it" not in ai_client.KNOWN_MODELS
 
     def test_telemetry_reports_configured_model(self, image, client_env):
         client_env(replies=[reply_json({"title": "T", "notes": []})])
         _, telemetry = ai_client.analyze(image)
-        assert telemetry["model"] == "HuggingFaceTB/SmolVLM-500M-Instruct"
-        assert telemetry["model_used"] == "HuggingFaceTB/SmolVLM-500M-Instruct"
-        assert telemetry["endpoint"] == "local"
+        assert telemetry["model"] == ai_client.DEFAULT_MODEL
+        assert telemetry["model_used"] == ai_client.DEFAULT_MODEL
+        assert telemetry["endpoint"] == ai_client.endpoint_url()
         assert telemetry["model_fallbacks"] == []
 
-    def test_readme_and_env_example_match_default(self):
-        import io
-        import pathlib
+    def test_docs_and_env_example_match_default(self):
+        readme = io.open(ROOT / "readme.md", encoding="utf-8").read()
+        env_example = io.open(ROOT / ".env.example", encoding="utf-8").read()
+        assert f"GEMMA_MODEL={ai_client.DEFAULT_MODEL}" in readme
+        # .env.example leaves the value blank on purpose so the code default
+        # wins; the documented model must still be listed there.
+        env_text = io.open(ROOT / ".env.example", encoding="utf-8").read()
+        assert ai_client.DEFAULT_MODEL in env_text
+        assert "GEMMA_MODEL=" in env_text
 
-        root = pathlib.Path(__file__).resolve().parents[1]
-        readme = io.open(root / "readme.md", encoding="utf-8").read()
-        env_example = io.open(root / ".env.example", encoding="utf-8").read()
-        assert f"HF_MODEL_ID={ai_client.DEFAULT_MODEL}" in readme
-        assert f"HF_MODEL_ID={ai_client.DEFAULT_MODEL}" in env_example
+    def test_env_example_documents_the_api_key(self):
+        env_example = io.open(ROOT / ".env.example", encoding="utf-8").read()
+        assert "GEMINI_API_KEY=" in env_example
+
+    def test_requirements_no_longer_pull_local_inference(self):
+        reqs = io.open(ROOT / "requirements.txt", encoding="utf-8").read()
+        assert "google-genai" in reqs
+        for gone in ("torch", "transformers", "accelerate", "huggingface_hub"):
+            assert gone not in reqs, f"{gone} is still a dependency"
 
 
 class TestReadiness:
-    def test_key_present_with_token(self, monkeypatch):
-        monkeypatch.setenv("HF_TOKEN", "hf_xyz")
+    def test_configuration_error_stays_inside_the_inference_handler(self):
+        """app/main.py catches InferenceError; subclasses keep the 502 path."""
+        assert issubclass(ai_client.ConfigurationError, ai_client.InferenceError)
+        assert issubclass(ai_client.ModelUnavailable, ai_client.InferenceError)
+
+    def test_key_present(self):
         assert ai_client.key_present() is True
 
-    def test_key_present_when_weights_cached(self, monkeypatch):
-        monkeypatch.delenv("HF_TOKEN", raising=False)
-        monkeypatch.setattr(ai_client, "weights_cached", lambda: True)
-        assert ai_client.key_present() is True
-
-    def test_not_ready_without_token_or_cache(self, monkeypatch):
-        monkeypatch.delenv("HF_TOKEN", raising=False)
-        monkeypatch.setattr(ai_client, "weights_cached", lambda: False)
+    def test_not_ready_without_a_key(self, monkeypatch):
+        for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_KEY"):
+            monkeypatch.delenv(name, raising=False)
         assert ai_client.key_present() is False
 
+    def test_google_api_key_alias_is_accepted(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.setenv("GOOGLE_API_KEY", "abc")
+        assert ai_client.api_key() == "abc"
 
-class TestPromptAssembly:
-    def test_two_step_call_forwards_image(self, image, client_env):
-        model, processor = client_env(
-            replies=[reply_json({"title": "T", "notes": [{"heading": "H", "content": ["C"]}]})]
+    def test_missing_key_is_a_clean_error_not_a_crash(self, monkeypatch, image):
+        for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_KEY"):
+            monkeypatch.delenv(name, raising=False)
+        with pytest.raises(ai_client.InferenceError, match="No Gemini API key"):
+            ai_client.analyze(image)
+
+    def test_a_missing_key_is_not_memoized(self, monkeypatch, image):
+        """Pasting a key into .env under a running server must just work.
+
+        A first request made before the key existed must not poison the
+        singleton, or the app stays dead until it is restarted. This drives the
+        real _get_client; stubbing it out would prove nothing.
+        """
+        for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_KEY"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(ai_client, "_client", None, raising=False)
+        monkeypatch.setattr(ai_client, "_client_error", None, raising=False)
+
+        with pytest.raises(ai_client.ConfigurationError, match="No Gemini API key"):
+            ai_client.analyze(image)
+        assert ai_client._client_error is None
+
+        # Building a client makes no network call, so this stays hermetic.
+        monkeypatch.setenv("GEMINI_API_KEY", "added-later")
+        assert ai_client._get_client() is not None
+
+    def test_a_broken_client_build_is_memoized(self, monkeypatch, image):
+        """An install that cannot work is remembered, not retried per request."""
+        monkeypatch.setattr(ai_client, "_client", None, raising=False)
+        monkeypatch.setattr(ai_client, "_client_error", None, raising=False)
+        monkeypatch.setattr(
+            ai_client,
+            "_build_client",
+            lambda: (_ for _ in ()).throw(ai_client.InferenceError("cannot build")),
         )
-        ai_client.analyze(image, mode="notes")
+        for _ in range(2):
+            with pytest.raises(ai_client.InferenceError, match="cannot build"):
+                ai_client.analyze(image)
+        assert ai_client._client_error is not None
 
-        assert processor.processor_calls, "processor(text=...) path was not used"
-        kwargs = processor.processor_calls[0]
-        assert "images" in kwargs and len(kwargs["images"]) == 1
-        # The image placeholder must survive into the templated prompt text.
-        assert "[image]" in kwargs["text"][0]
 
-        user_msg = [
-            m for m in processor.template_calls[0]["messages"] if m["role"] == "user"
-        ][0]
-        assert any(p.get("type") == "image" for p in user_msg["content"])
+class TestRequestAssembly:
+    def test_image_is_sent_inline_with_its_real_mime(self, image, client_env):
+        client = client_env(replies=[reply_json({"title": "T", "notes": []})])
+        ai_client.analyze(image)
 
-    def test_fallback_path_still_forwards_image(self, image, client_env):
-        model, processor = client_env(
-            replies=[reply_json({"title": "T", "notes": []})], two_step_ok=False
-        )
-        ext, _ = ai_client.analyze(image)
+        sent = inline_parts(client.calls[0]["contents"])
+        assert len(sent) == 1
+        assert sent[0].mime_type == "image/png"
+        assert sent[0].data == image.data
 
-        assert ext.title == "T"
-        template_calls = processor.template_calls
-        assert template_calls[-1]["tokenize"] is True
-        assert template_calls[-1]["images"], "fallback path dropped the image"
-
-    def test_mode_selects_system_prompt(self, image, client_env):
-        model, processor = client_env(replies=[reply_json({"title": "ER", "notes": []})])
+    def test_system_prompt_is_folded_into_the_user_turn(self, image, client_env):
+        client = client_env(replies=[reply_json({"title": "ER", "notes": []})])
         ai_client.analyze(image, mode="er")
-        system_msg = [
-            m for m in processor.template_calls[0]["messages"] if m["role"] == "system"
-        ][0]
-        text = " ".join(p["text"] for p in system_msg["content"])
-        assert "Database ER Diagram" in text
 
-    def test_decode_strips_the_prompt(self):
-        # A generated row carries the prompt tokens before the reply; decoding
-        # must return only the reply.
-        from conftest import FakeIds, FakeProcessor
+        texts = text_parts(client.calls[0]["contents"])
+        assert len(texts) == 1
+        # Gemma rejects a system role, so both blocks arrive in one user turn.
+        assert "Database ER Diagram" in texts[0]
+        assert "Return ONLY a single valid JSON object" in texts[0]
+        assert "---" in texts[0]
 
-        generated = FakeIds([["<pad>", "<pad>", "the reply"]])
-        processor = FakeProcessor()
-        assert ai_client._decode(processor, generated, 2) == "the reply"
-        assert ai_client._decode(processor, generated, 0) == "<pad><pad>the reply"
+    def test_only_a_user_role_is_sent(self, image, client_env):
+        client = client_env(replies=[reply_json({"title": "T", "notes": []})])
+        ai_client.analyze(image)
+        assert {c.role for c in client.calls[0]["contents"]} == {"user"}
+
+    def test_json_mode_is_never_requested(self, image, client_env):
+        """Gemma rejects response_mime_type/response_schema outright."""
+        client = client_env(replies=[reply_json({"title": "T", "notes": []})])
+        ai_client.analyze(image)
+
+        config = client.calls[0]["config"]
+        assert config.response_mime_type is None
+        assert config.response_schema is None
+
+    def test_system_instruction_is_never_sent(self, image, client_env):
+        """Gemma was not trained with a system role and rejects the field."""
+        client = client_env(replies=[reply_json({"title": "T", "notes": []})])
+        ai_client.analyze(image)
+        assert client.calls[0]["config"].system_instruction is None
+
+    def test_sampler_knobs_are_omitted_by_default(self, image, client_env):
+        """Gemma is served with the default sampler; others are rejected."""
+        client = client_env(replies=[reply_json({"title": "T", "notes": []})])
+        ai_client.analyze(image)
+
+        config = client.calls[0]["config"]
+        assert config.temperature is None
+        assert config.top_p is None
+        assert config.max_output_tokens == ai_client.MAX_OUTPUT_TOKENS
+
+    def test_sampler_knobs_are_sent_when_explicitly_configured(
+        self, image, client_env, monkeypatch
+    ):
+        monkeypatch.setenv("GEMMA_TEMPERATURE", "0.2")
+        monkeypatch.setenv("GEMMA_TOP_P", "0.9")
+        monkeypatch.setenv("GEMMA_MAX_OUTPUT_TOKENS", "512")
+        client = client_env(replies=[reply_json({"title": "T", "notes": []})])
+        ai_client.analyze(image)
+
+        config = client.calls[0]["config"]
+        assert config.temperature == 0.2
+        assert config.top_p == 0.9
+        assert config.max_output_tokens == 512
+
+    def test_text_only_retry_sends_no_image(self, image, client_env):
+        client = client_env(
+            replies=[
+                "not json",
+                reply_json(
+                    {"title": "T", "notes": [{"heading": "H", "content": ["C"]}]}
+                ),
+            ]
+        )
+        ai_client.analyze(image)
+
+        retry = client.calls[1]["contents"]
+        assert inline_parts(retry) == []
+        assert "could not be parsed as JSON" in text_parts(retry)[0]
 
 
-class TestGenerationErrors:
-    def test_empty_response_rejected(self, image, client_env):
+class TestErrorTranslation:
+    def test_empty_response_is_rejected(self, image, client_env):
         client_env(replies=["   "])
         with pytest.raises(ai_client.InferenceError, match="empty response"):
             ai_client.analyze(image)
 
-    def test_oom_is_a_friendly_error(self, image, client_env):
-        client_env(error=RuntimeError("CUDA out of memory. Tried to allocate 2 GiB"))
-        with pytest.raises(ai_client.InferenceError, match="out of memory during generation"):
+    def test_a_blocked_response_explains_the_safety_filter(self, image, client_env):
+        client_env(reply_factory=lambda text: FakeResponse(text="", block_reason="SAFETY"))
+        with pytest.raises(ai_client.InferenceError, match="safety filter"):
             ai_client.analyze(image)
 
-    def test_generation_failure_wrapped(self, image, client_env):
-        client_env(error=RuntimeError("shape mismatch in forward pass"))
-        with pytest.raises(ai_client.InferenceError, match="Generation failed"):
+    def test_an_early_stop_is_reported_as_such(self, image, client_env):
+        client_env(reply_factory=lambda text: FakeResponse(text="", finish_reason="MAX_TOKENS"))
+        with pytest.raises(ai_client.InferenceError, match="MAX_TOKENS"):
             ai_client.analyze(image)
 
-    def test_encode_failure_names_both_paths(self, image, client_env):
-        client_env(replies=["x"], two_step_ok=False, template_works=False)
-        with pytest.raises(ai_client.InferenceError, match="could not encode the prompt"):
+    def test_rejected_key_is_a_clean_error(self, image, client_env):
+        client_env(error=FakeAPIError("API key not valid. Please pass a valid API key.", 400))
+        with pytest.raises(ai_client.InferenceError, match="rejected"):
             ai_client.analyze(image)
+
+    def test_json_mode_rejection_is_surfaced_not_retried(self, image, client_env):
+        """The failure mode the module docstring warns about."""
+        client = client_env(
+            error=FakeAPIError("JSON mode is not enabled for models/gemma-3-27b-it", 400),
+            chain="gemma-3-12b-it",
+        )
+        with pytest.raises(ai_client.InferenceError, match="rejected this request"):
+            ai_client.analyze(image)
+        # A fatal request error must not burn quota walking the chain.
+        assert len(client.calls) == 1
+
+    def test_system_instruction_rejection_is_surfaced(self, image, client_env):
+        client_env(
+            error=FakeAPIError(
+                "Developer instruction is not enabled for models/gemma-3-27b-it", 400
+            )
+        )
+        with pytest.raises(ai_client.InferenceError, match="rejected this request"):
+            ai_client.analyze(image)
+
+    def test_saturation_retries_then_falls_back(
+        self, image, client_env, no_real_sleeps
+    ):
+        client = client_env(
+            replies=[
+                reply_json(
+                    {"title": "Recovered", "notes": [{"heading": "H", "content": ["C"]}]}
+                )
+            ],
+            error=FakeAPIError("Resource has been exhausted", 429),
+            error_on=[1, 2, 3],
+            chain="gemma-3-12b-it",
+        )
+        ext, telemetry = ai_client.analyze(image)
+
+        assert ext.title == "Recovered"
+        assert [c["model"] for c in client.calls] == [
+            "gemma-3-27b-it",
+            "gemma-3-27b-it",
+            "gemma-3-27b-it",
+            "gemma-3-12b-it",
+        ]
+        assert telemetry["model_used"] == "gemma-3-12b-it"
+        assert telemetry["model_fallbacks"] == ["gemma-3-27b-it"]
+        assert len(no_real_sleeps) == 2
+
+    def test_a_missing_model_is_skipped_without_retrying(self, image, client_env):
+        client = client_env(
+            replies=[
+                reply_json(
+                    {"title": "Recovered", "notes": [{"heading": "H", "content": ["C"]}]}
+                )
+            ],
+            error=FakeAPIError("models/gemma-3-27b-it is not found", 404),
+            error_on=1,
+            chain="gemma-3-12b-it",
+        )
+        _ext, telemetry = ai_client.analyze(image)
+        assert telemetry["model_used"] == "gemma-3-12b-it"
+        # A model the API does not serve must not burn the backoff budget.
+        assert [c["model"] for c in client.calls] == ["gemma-3-27b-it", "gemma-3-12b-it"]
+
+    def test_an_exhausted_chain_raises_the_last_error(self, image, client_env):
+        client = client_env(
+            error=FakeAPIError("Service unavailable", 503), chain="gemma-3-12b-it"
+        )
+        with pytest.raises(ai_client.InferenceError, match="Service unavailable"):
+            ai_client.analyze(image)
+        assert {c["model"] for c in client.calls} == {
+            "gemma-3-27b-it",
+            "gemma-3-12b-it",
+        }
 
     def test_unparseable_output_degrades_gracefully(self, image, client_env):
-        # No JSON on either attempt: notes survive, a warning explains why.
         client_env(replies=["not json at all", "still not json"])
         ext, telemetry = ai_client.analyze(image)
         assert ext.notes == []
         assert any("could not parse" in w for w in ext.warnings)
         assert telemetry["raw_preview"]
+
+    def test_a_retry_back_on_the_primary_clears_the_fallback_record(
+        self, image, client_env
+    ):
+        """The model reported must be the one that produced the answer.
+
+        The first call saturates onto the fallback; the content retry then
+        succeeds on the primary. Stacking the skip lists would report the
+        primary as both used and skipped.
+        """
+        client = client_env(
+            replies=[json.dumps(TestEmptyContentRetry.EMPTY), json.dumps(TestEmptyContentRetry.REAL)],
+            error=FakeAPIError("Resource has been exhausted", 429),
+            error_on=[1, 2, 3],
+            chain="gemma-3-12b-it",
+        )
+        ext, telemetry = ai_client.analyze(image, mode="flowchart")
+
+        assert ext.title == "OS Process State Model"
+        assert telemetry["model_used"] == "gemma-3-27b-it"
+        assert telemetry["model_fallbacks"] == []
+        assert [c["model"] for c in client.calls][:4] == [
+            "gemma-3-27b-it",
+            "gemma-3-27b-it",
+            "gemma-3-27b-it",
+            "gemma-3-12b-it",
+        ]
+
+    def test_the_reported_model_is_the_one_that_served_the_reply(
+        self, image, client_env
+    ):
+        """A first answer that falls back is reported as having done so."""
+        client_env(
+            replies=[
+                reply_json(
+                    {"title": "Recovered", "notes": [{"heading": "H", "content": ["C"]}]}
+                )
+            ],
+            error=FakeAPIError("Resource has been exhausted", 429),
+            error_on=[1, 2, 3],
+            chain="gemma-3-12b-it",
+        )
+        _ext, telemetry = ai_client.analyze(image)
+        assert telemetry["model_used"] == "gemma-3-12b-it"
+        assert telemetry["model_fallbacks"] == ["gemma-3-27b-it"]
 
 
 class TestEmptyContentRetry:
@@ -161,7 +401,7 @@ class TestEmptyContentRetry:
     }
 
     def test_retry_with_image_recovers_content(self, image, client_env):
-        model, _ = client_env(replies=[json.dumps(self.EMPTY), json.dumps(self.REAL)])
+        client_env(replies=[json.dumps(self.EMPTY), json.dumps(self.REAL)])
         ext, telemetry = ai_client.analyze(image, mode="flowchart")
 
         assert telemetry["content_attempts"] == 1
@@ -171,13 +411,13 @@ class TestEmptyContentRetry:
         assert ext.diagram is not None
 
     def test_retry_still_image_aware(self, image, client_env):
-        model, processor = client_env(
-            replies=[json.dumps(self.EMPTY), json.dumps(self.REAL)]
-        )
+        client = client_env(replies=[json.dumps(self.EMPTY), json.dumps(self.REAL)])
         ai_client.analyze(image, mode="flowchart")
-        # Two image generations: the image must be attached to the retry too.
-        assert sum(1 for c in processor.processor_calls if c.get("images")) == 2
-        assert "previous answer contained no usable content" in processor.processor_calls[-1]["text"][0]
+
+        assert len(client.calls) == 2
+        # The image must be attached to the retry too, or it reads nothing.
+        assert client.calls[1]["contents"][0].parts[0].inline_data is not None
+        assert "no usable content" in text_parts(client.calls[1]["contents"])[0]
 
     def test_degrades_with_a_raw_preview_when_retry_fails(self, image, client_env):
         client_env(replies=[json.dumps(self.EMPTY), json.dumps(self.EMPTY)])
@@ -189,15 +429,18 @@ class TestEmptyContentRetry:
         assert ext.notes == []
 
     def test_no_retry_when_content_was_extracted(self, image, client_env):
-        model, _ = client_env(replies=[json.dumps(self.REAL)])
+        client = client_env(replies=[json.dumps(self.REAL)])
         ext, telemetry = ai_client.analyze(image)
         assert "content_attempts" not in telemetry
-        assert len(model.generate_calls) == 1
+        assert len(client.calls) == 1
+        assert ext.diagram is not None
 
     def test_retry_failure_is_not_fatal(self, image, client_env):
-        # The retry raises; the empty first result is still returned, annotated.
-        model, _ = client_env(replies=[json.dumps(self.EMPTY)], error=RuntimeError("CUDA out of memory"))
-        model.error_on = 2
+        client_env(
+            replies=[json.dumps(self.EMPTY)],
+            error=FakeAPIError("Resource has been exhausted", 429),
+            error_on=2,
+        )
         ext, telemetry = ai_client.analyze(image)
         assert telemetry["content_retry_error"]
         assert telemetry["degraded"] is True
@@ -206,16 +449,18 @@ class TestEmptyContentRetry:
 
 class TestCorrectiveRetries:
     def test_json_repair_on_malformed_initial_response(self, image, client_env):
-        model, _ = client_env(
+        client = client_env(
             replies=[
                 "Here is your output but it is not valid JSON {{",
-                reply_json({"title": "Recovered", "notes": [{"heading": "H", "content": ["C"]}]}),
+                reply_json(
+                    {"title": "Recovered", "notes": [{"heading": "H", "content": ["C"]}]}
+                ),
             ]
         )
         ext, telemetry = ai_client.analyze(image)
         assert telemetry["attempts"] == 2
         assert ext.title == "Recovered"
-        assert len(model.generate_calls) == 2
+        assert len(client.calls) == 2
 
     def test_diagram_repair_on_invalid_mermaid(self, image, client_env):
         bad = {
@@ -223,14 +468,14 @@ class TestCorrectiveRetries:
             "notes": [{"heading": "H", "content": ["C"]}],
             "diagram": {"type": "flowchart", "mermaid": "flowchart TD\n    A[Unclosed --> B"},
         }
-        model, _ = client_env(
+        client = client_env(
             replies=[json.dumps(bad), "flowchart TD\n    A[Fixed bracket] --> B[Next]"]
         )
         ext, telemetry = ai_client.analyze(image)
         assert telemetry["diagram_attempts"] == 2
         assert ext.diagram is not None
         assert "Fixed bracket" in ext.diagram["mermaid"]
-        assert len(model.generate_calls) == 2
+        assert len(client.calls) == 2
 
     def test_valid_diagram_needs_no_retry(self, image, client_env):
         good = {
@@ -238,10 +483,10 @@ class TestCorrectiveRetries:
             "notes": [{"heading": "H", "content": ["C"]}],
             "diagram": {"type": "flowchart", "mermaid": "flowchart TD\n    A[Write] --> B[Read]"},
         }
-        model, _ = client_env(replies=[json.dumps(good)])
+        client = client_env(replies=[json.dumps(good)])
         ext, telemetry = ai_client.analyze(image)
         assert telemetry["diagram_attempts"] == 1
-        assert len(model.generate_calls) == 1
+        assert len(client.calls) == 1
         assert ext.diagram["mermaid"].startswith("flowchart TD")
 
     def test_unrepairable_diagram_does_not_lose_notes(self, image, client_env):

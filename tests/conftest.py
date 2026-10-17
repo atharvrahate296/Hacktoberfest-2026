@@ -1,123 +1,101 @@
-"""Shared test doubles for the local Hugging Face inference client.
+"""Shared test doubles for the cloud Gemma inference client.
 
-The real model is never downloaded in tests. What is faked is the tensor layer
-only: a model whose ``generate`` returns a scripted reply, and a processor whose
-chat-template/tokenizer/decode surface matches the API ``app/ai_client.py`` uses.
-Everything above that -- prompt assembly, JSON repair, Mermaid validation,
-normalization, HTTP routing -- runs for real.
+No network and no API key are used. What is faked is only the transport: a
+Gemini client whose ``generate_content`` returns a scripted reply, or raises a
+scripted error. The real SDK's ``types`` objects are still used to build and
+inspect the request, so prompt assembly, image attachment, sampler config and
+error translation all run for real.
 """
 
 from __future__ import annotations
 
 import io
 import json
+from types import SimpleNamespace
+from typing import Iterable
 
 import pytest
 
 from app import ai_client, validation
 
-PROMPT_LEN = 2
+
+class FakeAPIError(Exception):
+    """Stands in for google.genai.errors.APIError.
+
+    The client reads ``code`` and ``message`` off the exception; that is the
+    whole surface it depends on.
+    """
+
+    def __init__(self, message: str, code: int | None = None):
+        super().__init__(message)
+        self.message = message
+        self.code = code
 
 
-class FakeIds:
-    """Minimal stand-in for a torch tensor of token ids."""
+class FakeResponse:
+    """The subset of GenerateContentResponse the client reads."""
 
-    def __init__(self, rows: list[list]):
-        self._rows = [list(r) for r in rows]
-
-    @property
-    def shape(self):
-        return (len(self._rows), len(self._rows[0]) if self._rows else 0)
-
-    def __len__(self):
-        return len(self._rows)
-
-    def __getitem__(self, key):
-        if isinstance(key, tuple):
-            _, cols = key
-            return FakeIds([row[cols] for row in self._rows])
-        return FakeIds([row[key] for row in self._rows])
-
-    def to(self, device):
-        return self
-
-    def rows(self):
-        return self._rows
-
-
-class FakeModel:
-    def __init__(self, replies: list[str], error: Exception | None = None):
-        self.replies = list(replies)
-        self.error = error
-        # 1-based index of the generate() call that should raise; None = always.
-        self.error_on: int | None = None
-        self.generate_calls: list[dict] = []
-        self.eval_called = False
-
-    def generate(self, **inputs):
-        self.generate_calls.append(inputs)
-        if self.error is not None and (
-            self.error_on is None or self.error_on == len(self.generate_calls)
-        ):
-            raise self.error
-        reply = self.replies.pop(0) if self.replies else ""
-        return FakeIds([["<pad>", "<pad>", reply]])
-
-    def eval(self):
-        self.eval_called = True
-        return self
-
-    def to(self, device):
-        return self
-
-    def parameters(self):
-        yield type("Param", (), {"device": "cpu"})()
-
-
-class FakeProcessor:
-    """Mimics the processor call shapes ``_build_inputs`` tries in order."""
-
-    def __init__(self, two_step_ok: bool = True, template_works: bool = True):
-        self.two_step_ok = two_step_ok
-        self.template_works = template_works
-        self.template_calls: list[dict] = []
-        self.processor_calls: list[dict] = []
-
-    def apply_chat_template(
-        self, messages, tokenize=False, add_generation_prompt=True, **kwargs
+    def __init__(
+        self,
+        text: str = "",
+        finish_reason: str | None = None,
+        block_reason: str | None = None,
     ):
-        self.template_calls.append(
-            {"messages": messages, "tokenize": tokenize, "images": kwargs.get("images")}
+        self.text = text
+        self.candidates = (
+            [SimpleNamespace(finish_reason=finish_reason)] if finish_reason else []
         )
-        if not self.template_works:
-            raise ValueError("chat template unsupported")
-        if tokenize:
-            if not kwargs.get("images") and any(
-                part.get("type") == "image"
-                for msg in messages
-                for part in msg.get("content", [])
-            ):
-                # A real processor cannot tokenize an image-less prompt that
-                # still declares one; this forces the caller's fallback path.
-                raise ValueError("image content present but no images passed")
-            return {"input_ids": FakeIds([[0] * PROMPT_LEN]), "pixel_values": object()}
-        parts = []
-        for msg in messages:
-            for part in msg.get("content", []):
-                if part.get("type") == "text":
-                    parts.append(f"{msg['role']}:{part['text']}")
-                else:
-                    parts.append(f"{msg['role']}:[image]")
-        return "\n".join(parts)
+        self.prompt_feedback = SimpleNamespace(block_reason=block_reason)
 
-    def __call__(self, **kwargs):
-        self.processor_calls.append(kwargs)
-        if not self.two_step_ok:
-            raise ValueError("processor(text=..., images=...) unsupported")
-        return {"input_ids": FakeIds([[0] * PROMPT_LEN]), "pixel_values": object()}
 
-    def batch_decode(self, ids, skip_special_tokens=True):
-        return ["".join(str(tok) for tok in row) for row in ids.rows()]
+class _FakeModels:
+    def __init__(self, client: "FakeGenAI"):
+        self._client = client
+
+    def generate_content(self, model, contents, config):
+        client = self._client
+        client.calls.append({"model": model, "contents": contents, "config": config})
+        if client.error is not None and client._fails_on(len(client.calls)):
+            raise client.error
+        reply = client.replies.pop(0) if client.replies else ""
+        return client.reply_factory(reply)
+
+
+class FakeGenAI:
+    """Minimal stand-in for google.genai.Client."""
+
+    def __init__(self, replies=None, error=None, reply_factory=None):
+        self.replies = list(replies or [])
+        self.error = error
+        # Which 1-based call indices raise. A single int is that one call; an
+        # iterable is those calls, e.g. every attempt on a saturated model.
+        self.error_on: int | Iterable[int] | None = None
+        self.reply_factory = reply_factory or FakeResponse
+        self.calls: list[dict] = []
+        self.models = _FakeModels(self)
+
+    def _fails_on(self, index: int) -> bool:
+        if self.error_on is None:
+            return True
+        if isinstance(self.error_on, int):
+            return self.error_on == index
+        return index in self.error_on
+
+
+@pytest.fixture(autouse=True)
+def no_real_sleeps(monkeypatch):
+    """Record backoff sleeps instead of performing them."""
+    slept: list[float] = []
+    monkeypatch.setattr(ai_client, "_SLEEP", slept.append)
+    return slept
+
+
+@pytest.fixture(autouse=True)
+def api_key(monkeypatch):
+    """A key is present unless a test removes it."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setenv("GEMMA_MODEL", ai_client.DEFAULT_MODEL)
+    monkeypatch.setenv("GEMMA_MODEL_FALLBACKS", "")
 
 
 @pytest.fixture
@@ -131,26 +109,33 @@ def image():
 
 @pytest.fixture
 def client_env(monkeypatch):
-    """Install a scripted model/processor pair and reset loader globals.
+    """Install a scripted Gemini client.
 
-    Returns a factory: ``client_env(replies=[...], error=..., two_step_ok=...)
-    -> (model, processor)``.
+    Returns a factory: ``client_env(replies=[...], error=..., chain="a,b")``.
     """
 
-    def install(replies=None, error=None, two_step_ok=True, template_works=True):
-        monkeypatch.setattr(ai_client, "_model", None, raising=False)
-        monkeypatch.setattr(ai_client, "_processor", None, raising=False)
-        monkeypatch.setattr(ai_client, "_load_error", None, raising=False)
-        monkeypatch.setattr(ai_client, "_model_device", "cpu", raising=False)
+    def install(replies=None, error=None, error_on=None, chain="", reply_factory=None):
+        monkeypatch.setattr(ai_client, "_client", None, raising=False)
+        monkeypatch.setattr(ai_client, "_client_error", None, raising=False)
+        if chain:
+            monkeypatch.setenv("GEMMA_MODEL_FALLBACKS", chain)
 
-        model = FakeModel(replies or [], error=error)
-        processor = FakeProcessor(two_step_ok=two_step_ok, template_works=template_works)
-        monkeypatch.setattr(
-            ai_client, "_get_model_and_processor", lambda: (model, processor)
-        )
-        return model, processor
+        client = FakeGenAI(replies or [], error, reply_factory)
+        client.error_on = error_on
+        monkeypatch.setattr(ai_client, "_get_client", lambda: client)
+        return client
 
     return install
+
+
+def part_texts(contents) -> list[str]:
+    """Every text part in a request, in order."""
+    out: list[str] = []
+    for content in contents:
+        for part in getattr(content, "parts", None) or []:
+            if getattr(part, "text", None):
+                out.append(part.text)
+    return out
 
 
 def reply_json(payload: dict) -> str:

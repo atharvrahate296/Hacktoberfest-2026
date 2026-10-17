@@ -6,43 +6,66 @@ Scribble2Structure turns handwritten notes, whiteboard photographs, brainstormin
 sketches, technical system drawings and meeting notes into structured artifacts with
 rendered Mermaid diagrams, verifiable action plans and multi-format exports.
 
-Inference runs **entirely on your own machine** through Hugging Face Transformers. There is
-no inference API, no per-request cost, and no image ever leaves the device.
+Inference runs in the cloud on **Gemma**, served by the **Gemini API**
+(Google AI Studio). There is no model to download, no GPU, and no VRAM to budget —
+a single API key and a `GEMMA_MODEL` value in `.env` are the whole setup. Your uploaded
+images are sent to Google's servers to be analysed, so this is **not** an offline tool.
 
 ---
 
-## Choosing a model that fits your laptop
+## Choosing a model
 
-Extraction quality scales with the model, and the model you can run is bounded by the
-memory your machine actually has. **This project is designed around that constraint:** the
-same codebase runs a 1 GB model on an entry-level laptop and a 9 GB model on a workstation,
-with no code changes — only the `HF_MODEL_ID` value in `.env`.
+Gemma's vision sizes are served by the Gemini API. Extraction quality scales with the
+model, and so does latency and cost. **This project is designed around that tradeoff:**
+the same codebase runs the 4B or the 27B with no code change — only the `GEMMA_MODEL`
+value in `.env`.
 
-| `HF_MODEL_ID` | Download | Fits comfortably on | Quality |
+| `GEMMA_MODEL` | Params | Image input | Notes |
 | --- | --- | --- | --- |
-| `HuggingFaceTB/SmolVLM-500M-Instruct` *(default)* | ~1 GB | 4 GB VRAM, or CPU-only | Runs anywhere; weakest extraction. Useful for wiring and layout checks. |
-| `Qwen/Qwen2-VL-2B-Instruct` | ~4 GB | 8 GB VRAM, or 4 GB VRAM with CPU offload | **Recommended.** Best quality-to-footprint ratio; the practical default for real use. |
-| `Qwen/Qwen2.5-VL-3B-Instruct` | ~6 GB | 8–12 GB VRAM | Better on dense handwriting and multi-box diagrams. |
-| `google/gemma-3-4b-it` | ~9 GB | 12–16 GB VRAM | Highest accuracy; gated on Hugging Face, requires accepting the licence. |
+| `gemma-3-27b-it` *(default)* | 27B | yes | Strongest extraction: dense handwriting, many-box diagrams, ER keys. |
+| `gemma-3-12b-it` | 12B | yes | Faster and cheaper, weaker on crowded whiteboards. |
+| `gemma-3-4b-it` | 4B | yes | Fastest; best for wiring and layout checks, not dense notes. |
+| `gemma-4-26b-a4b-it` | 26B MoE | yes | Gemma 4 mixture-of-experts, if it is enabled on your key. |
 
-### How memory is handled at runtime
+`gemma-3-1b-it` is deliberately absent: the 1B size is text-only and rejects every image.
 
-`app/ai_client.py` sizes the model to the hardware instead of assuming one target:
+### Optional: a fallback chain
 
-- **CUDA available** → the model is placed on the GPU in `float16` for speed. If it does not
-  fit in VRAM, it retries with `device_map="auto"` under a **3 GiB VRAM ceiling**, letting
-  `accelerate` offload the overflow to system RAM instead of raising an out-of-memory error.
-- **No CUDA** → `float32` on CPU. Slower, but no special hardware required.
-- **Model choice is yours, at runtime** — the id is read from the environment on every
-  request, so switching models needs only an edit to `.env` and a restart. Weights are cached
-  in `~/.cache/huggingface` after the first run.
+Set `GEMMA_MODEL_FALLBACKS` to a comma-separated list of ids to try in order when the
+primary is saturated, rate-limited, or not served on your key:
+
+```ini
+GEMMA_MODEL_FALLBACKS=gemma-3-12b-it,gemma-3-4b-it
+```
+
+It is empty by default, so a failure is reported rather than silently answered by a
+smaller model. Whichever model actually served the reply is reported in the response
+telemetry as `telemetry.model_used`, with `telemetry.model_fallbacks` listing what was
+skipped.
+
+---
+
+## What "cloud" changes for the schema
+
+Gemma is served on the Gemini API without three features that Gemini models have. This
+is not a workaround; it is the only way the endpoint accepts a Gemma request, and it
+shapes `app/ai_client.py`:
+
+| Feature | Gemini | Gemma here | What the app does instead |
+| --- | --- | --- | --- |
+| JSON mode / structured output | yes | **no** — `JSON mode is not enabled for models/gemma-3-27b-it` | The JSON schema ships in the prompt; the reply is parsed, with one corrective retry. |
+| System role | yes | **no** — `Developer instruction is not enabled for models/…` | The system prompt is folded into the single user turn. |
+| Sampler knobs | yes | default sampler only | `temperature` / `top_p` are omitted unless you set them explicitly. |
+
+The prompt-driven JSON contract is why the corrective-retry machinery is not legacy
+code here — for Gemma it is the primary path, and it is covered by tests.
 
 ---
 
 ## Features
 
-- **Local, model-flexible inference** — any of the vision-language models above, selected by
-  your available memory; automatic CPU/GPU placement with graceful offload.
+- **Cloud inference, no local weights** — Gemma on the Gemini API; nothing to download,
+  nothing to fit in VRAM, selected entirely from `.env`.
 - **Reconstruction as the deliverable** — diagrams, notes and action plans are rebuilt as
   editable artifacts rather than described in prose.
 - **8 transformation modes**:
@@ -55,11 +78,15 @@ with no code changes — only the `HF_MODEL_ID` value in `.env`.
   7. **Scientific Concept Map** — equations, symbols, units and relationships preserved.
   8. **Database ER Diagram** — entities, attributes, PK/FK, cardinalities, plus SQL `CREATE TABLE`.
 - **Rendered Mermaid with a live editor** — `flowchart`, `graph`, `mindmap`,
-  `sequenceDiagram` and `erDiagram`; edit the source and re-render in place; export `.mmd` or `.svg`.
+  `sequenceDiagram` and `erDiagram`; edit the source and re-render in place; export `.mmd`,
+  `.svg` or `.png`. Labels are native SVG text so exported images stay faithful.
 - **Side-by-side comparison** — the uploaded image next to the reconstructed diagram.
 - **Editable output with state management** — live editing of titles, summaries, notes,
   action items and diagrams, with reset and unsaved-change protection.
-- **Multi-format exports** — Markdown, plain text, JSON, Mermaid and SVG.
+- **Share image** — one click renders the extraction as a designed PNG card (title, notes,
+  takeaways, action plan, SQL) drawn on a canvas, so formulas and identifiers are exact
+  rather than regenerated by an image model.
+- **Multi-format exports** — PNG card, Markdown, plain text, JSON, Mermaid and SVG.
 - **Sample gallery** — six generated inputs, one per diagram-oriented mode, for zero-effort evaluation.
 
 ---
@@ -71,9 +98,9 @@ with no code changes — only the `HF_MODEL_ID` value in `.env`.
 ```
 upload → validate → prompt → generate → repair → normalize → render
          │                       │         │          │
-    magic bytes,           image +     JSON retry,   schema-echo
-    size, EXIF,            mode prompt Mermaid retry rejection
-    pixel ceiling
+     magic bytes,           image +     JSON retry,   schema-echo
+     size, EXIF,            mode prompt Mermaid retry rejection
+     pixel ceiling
 ```
 
 1. **Validation** (`app/validation.py`) — the file's leading bytes are checked against real
@@ -82,9 +109,12 @@ upload → validate → prompt → generate → repair → normalize → render
    any inference cost is incurred.
 2. **Prompting** (`app/prompts.py`) — a mode-specific system prompt plus the full JSON schema.
    Instructions state that the image is data, never instructions.
-3. **Inference** (`app/ai_client.py`) — the model is loaded once into a thread-safe singleton.
-   Placement is attempted GPU-first, then via `device_map="auto"` with memory ceilings; the
-   architecture declared by the checkpoint decides which model class is used.
+3. **Inference** (`app/ai_client.py`) — one thread-safe Gemini API client is built from the
+   key and reused. The image goes inline as base64 with its real MIME type; the system
+   prompt and request are fused into one user turn because Gemma rejects a system role.
+   JSON mode is never requested. Saturated or missing models move along the fallback chain,
+   each with a short backoff; a request the API rejects outright fails immediately instead
+   of burning quota on retries that cannot succeed.
 4. **Corrective retries** — one retry when the reply is not parseable JSON, and one retry when
    the generated Mermaid fails validation. Both are text-only follow-ups.
 5. **Normalization** (`app/validation.py`) — arbitrary model JSON is coerced into a
@@ -102,8 +132,8 @@ upload → validate → prompt → generate → repair → normalize → render
 
 A hostile, broken or simply weak model response degrades instead of breaking the product:
 notes and takeaways survive a diagram failure, a rejected diagram falls back to showing its
-source in a code block, and a load failure is translated into an actionable message rather
-than a stack trace.
+source in a code block, and a rejected key or saturated endpoint is translated into an
+actionable message rather than a stack trace.
 
 ---
 
@@ -112,10 +142,7 @@ than a stack trace.
 ### 1. Prerequisites
 
 - Python 3.10+
-- Disk space for the chosen model (1–9 GB, see the table above)
-- A Hugging Face access token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens),
-  needed only to download weights the first time. Gated models additionally require accepting
-  their licence.
+- A Gemini API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
 
 ### 2. Install
 
@@ -137,11 +164,14 @@ cp .env.example .env      # Windows: copy .env.example .env
 ```
 
 ```ini
-# Hugging Face token - only needed for the first weight download
-HF_TOKEN=hf_your_actual_token_here
+# Gemini API key - https://aistudio.google.com/apikey
+GEMINI_API_KEY=your_actual_key_here
 
-# Pick the model that matches your available memory (default shown)
-HF_MODEL_ID=HuggingFaceTB/SmolVLM-500M-Instruct
+# Pick the model that matches the quality/latency tradeoff (default shown)
+GEMMA_MODEL=gemma-3-27b-it
+
+# Optional: try other models in order when the primary is unavailable
+# GEMMA_MODEL_FALLBACKS=gemma-3-12b-it,gemma-3-4b-it
 
 # Optional image upload limit in MB (default: 10)
 MAX_UPLOAD_MB=10
@@ -153,7 +183,8 @@ MAX_UPLOAD_MB=10
 uvicorn app.main:app --host 127.0.0.1 --port 8090 --reload
 ```
 
-Open **http://127.0.0.1:8090**.
+Open **http://127.0.0.1:8090**. If the key is missing, the UI says so on load instead of
+failing on the first upload.
 
 ---
 
@@ -161,7 +192,7 @@ Open **http://127.0.0.1:8090**.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/health` | Readiness and the active model. `200` when runnable, `503` when weights are missing. |
+| `GET` | `/api/health` | Readiness, the active model and the endpoint. `200` when a key is set, `503` when not. |
 | `GET` | `/api/config` | Model id, upload limit, supported formats, available modes. |
 | `GET` | `/api/samples` | Sample gallery entries. |
 | `POST` | `/api/analyze` | `multipart/form-data` with `image` and `mode`. `400` on a bad upload, `502` on an inference failure. |
@@ -185,14 +216,16 @@ python scripts/create_samples.py
 pytest
 ```
 
-The suite runs with no model download and no network. Only the tensor layer is faked
-(`tests/conftest.py`); prompt assembly, decoding, corrective retries, Mermaid validation,
-normalization and HTTP routing all execute for real.
+The suite runs with no network call and no API key. Only the transport is faked
+(`tests/conftest.py`); request assembly, the real SDK's `types` objects, config, error
+translation, corrective retries, Mermaid validation, normalization and HTTP routing all
+execute for real.
 
-- `tests/test_ai_client.py` — model selection, prompt assembly, decode, error translation, retries.
+- `tests/test_ai_client.py` — model selection and the fallback chain, request assembly, the
+  three Gemma API constraints above, error translation, retries.
 - `tests/test_diagram.py` — Mermaid sanitization and validation.
 - `tests/test_validation.py` — upload integrity and response normalization, including template-echo rejection.
-- `tests/test_frontend.py` — frontend contracts: render targets exist, ids are unique, no hardcoded model.
+- `tests/test_frontend.py` — frontend contracts: render targets exist, ids are unique, no hardcoded model, no stale local-inference copy.
 - `tests/test_pipeline.py` — end-to-end `/api/analyze`.
 
 ---
@@ -201,7 +234,7 @@ normalization and HTTP routing all execute for real.
 
 ```
 app/
-  ai_client.py    Local Hugging Face VLM client: load, place, generate, decode, repair
+  ai_client.py    Gemini API client: request assembly, fallback chain, retries
   validation.py   Upload integrity, EXIF transpose, response normalization
   diagram.py      Mermaid sanitization, validation, repair prompts
   prompts.py      Mode-specific system prompts and the JSON schema
@@ -216,11 +249,13 @@ tests/            Test suite and shared test doubles
 
 ## Security & reliability
 
-- **Secrets stay server-side.** `HF_TOKEN` is read only by the inference layer and is never
-  sent to the browser or committed; `.env` is gitignored.
+- **Secrets stay server-side.** `GEMINI_API_KEY` is read only by the inference layer and is
+  never sent to the browser or committed; `.env` is gitignored.
 - **Uploads are inspected, not trusted.** Magic-byte sniffing, format agreement, size and
   megapixel ceilings, and EXIF orientation correction.
 - **Model output is treated as data.** Generated SQL, Mermaid and prose are never executed.
   Script-like markup in a diagram is rejected, and all rendered text is HTML-escaped.
+- **Images are sent to a third party.** This is the deliberate cost of cloud inference: the
+  uploaded image reaches Google's servers. Do not use it for material you cannot share.
 - **No mocked responses in the product.** The real model runs in every mode; only the test
   suite substitutes fakes.

@@ -1,29 +1,37 @@
-"""Local Hugging Face transformers inference client for Scribble2Structure.
+"""Cloud inference client for Scribble2Structure -- Gemma via the Gemini API.
 
 Handles:
-  1. Load the configured VLM once via a module-level singleton (cached after
-     first call; never reloads on subsequent requests).
-  2. Build a multimodal chat message from the uploaded image + mode prompt.
-  3. Run local generate() and decode the reply text.
-  4. Parse the JSON object out of the reply (with at most 1 corrective retry).
-  5. Validate the Mermaid diagram (with at most 1 corrective retry).
-  6. Normalize everything into an Extraction.
+  1. Build one Gemini API client from the API key (module-level singleton).
+  2. Build a multimodal user turn from the uploaded image + mode prompt.
+  3. Call generate_content() on the configured Gemma model and read the reply.
+  4. Walk a model chain, moving to the next model when one is saturated.
+  5. Parse the JSON object out of the reply (with at most 1 corrective retry).
+  6. Validate the Mermaid diagram (with at most 1 corrective retry).
+  7. Normalize everything into an Extraction.
 
-GPU: Uses CUDA float16 — the model is placed on the GPU directly when it fits
-     in VRAM, otherwise device_map="auto" with a 3 GiB ceiling offloads the
-     overflow to CPU RAM.
-CPU: Falls back to float32 on CPU when no CUDA device is available.
+Gemma on the Gemini API has three constraints that shape this module. None of
+them are workarounds; they are the only way the API accepts a Gemma request:
+
+  * No JSON mode. Passing ``response_mime_type="application/json"`` fails with
+    ``"JSON mode is not enabled for models/<id>"``. The JSON schema therefore
+    lives in the prompt (app/prompts.py) and the reply is parsed afterwards,
+    which is what this app already did when it ran small local models, and the
+    corrective retries below are what make it reliable for cloud inference.
+  * No system role. Gemma was not trained with one, so ``system_instruction`` is
+    rejected. The system prompt is folded into the single user turn.
+  * Few sampling knobs. Gemma accepts the default sampler, so ``temperature``
+    and ``top_p`` are sent only when explicitly configured in the environment.
+
+Images are sent inline as base64 in the request; nothing is written to disk.
 """
 
 from __future__ import annotations
 
-import io
-import json
 import logging
 import os
 import time
-from contextlib import nullcontext
 from threading import Lock
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -38,62 +46,116 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL = "HuggingFaceTB/SmolVLM-500M-Instruct"
-MAX_NEW_TOKENS = 1536
+DEFAULT_MODEL = "gemma-3-27b-it"
+
+# Served by Google on the Gemini API. Only the 4B/12B/27B Gemma 3 sizes accept
+# image input; 1B is text-only and is deliberately absent.
+KNOWN_MODELS = (
+    "gemma-3-27b-it",
+    "gemma-3-12b-it",
+    "gemma-3-4b-it",
+    "gemma-4-26b-a4b-it",
+)
+
+# Gemini API public endpoint and version.
+DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com"
+DEFAULT_API_VERSION = "v1beta"
+
+# Gemma 3 caps generation at 8192 tokens, so this is comfortably inside it and
+# still leaves room for a full Mermaid diagram plus the notes payload.
+MAX_OUTPUT_TOKENS = 4096
 
 # How much of the model's own reply to keep for diagnosis when a run yields
 # nothing. Enough to see what went wrong, short enough to return in JSON.
 RAW_PREVIEW_CHARS = 1200
 
-# Model choices the loader is expected to handle, smallest first. Documented in
-# readme.md and .env.example; keep the default in sync with both.
-KNOWN_MODELS = (
-    "HuggingFaceTB/SmolVLM-500M-Instruct",
-    "Qwen/Qwen2-VL-2B-Instruct",
-    "Qwen/Qwen2.5-VL-3B-Instruct",
-    "google/gemma-3-4b-it",
-)
+# Wall-clock ceiling for a single HTTP call to the Gemini API. The SDK's own
+# default leaves a stalled connection waiting indefinitely, which presents to
+# the user as a request that never returns. Always bounded.
+def _call_timeout_ms() -> int:
+    """Per-request HTTP timeout in milliseconds. Never zero."""
+    return max(5_000, _int_env("GEMINI_TIMEOUT_MS", 120_000))
 
-# VRAM ceiling for device_map="auto" — keeps a buffer for activations/KV cache
-_GPU_MEM_CAP = "3GiB"
-# CPU RAM to allow as overflow (adjust if your machine has less RAM)
-_CPU_MEM_CAP = "6GiB"
+# Backoff for a saturated or erroring endpoint, before moving to the next model
+# in the chain. Replaced by a no-op in tests so the suite never really sleeps.
+_SLEEP = time.sleep
+RETRY_DELAYS = (1.0, 3.0)
+
+# Errors that mean the request itself is wrong. Walking the model chain cannot
+# fix these, and retrying only burns quota, so they fail immediately.
+_FATAL_MESSAGE_HINTS = (
+    "json mode is not enabled",
+    "developer instruction is not enabled",
+    "function calling is not enabled",
+    "api key not valid",
+    "permission denied",
+)
 
 
 def _env(name: str) -> str:
     return (os.getenv(name) or "").strip()
 
 
-def hf_token() -> str:
-    return _env("HF_TOKEN")
+def _int_env(name: str, fallback: int) -> int:
+    try:
+        return int(_env(name))
+    except (ValueError, TypeError):
+        return fallback
+
+
+def _float_env(name: str) -> float | None:
+    raw = _env(name)
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return None
 
 
 def api_key() -> str:
-    return hf_token()
+    """The Gemini API key.
+
+    GEMINI_API_KEY is the documented name; the two aliases are accepted because
+    that is what the Google tooling and most .env templates write.
+    """
+    return _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY") or _env("GEMINI_KEY")
 
 
 def model_id() -> str:
     """The configured model, falling back to the shipped default."""
-    return _env("HF_MODEL_ID") or DEFAULT_MODEL
+    return _env("GEMMA_MODEL") or _env("GEMINI_MODEL") or DEFAULT_MODEL
 
 
-def weights_cached() -> bool:
-    """True when the configured model's config is already in the HF cache."""
-    try:
-        from huggingface_hub import try_to_load_from_cache  # type: ignore
+def model_chain() -> list[str]:
+    """The configured model followed by any opt-in fallbacks, deduplicated.
 
-        return try_to_load_from_cache(model_id(), "config.json") is not None
-    except Exception:
-        return False
+    GEMMA_MODEL_FALLBACKS is a comma-separated list of ids tried in order when
+    the primary is saturated, rate-limited, or missing. It is empty by default
+    so a failure is reported rather than silently answered by a smaller model.
+    """
+    chain: list[str] = []
+    for candidate in [model_id(), *_env("GEMMA_MODEL_FALLBACKS").split(",")]:
+        name = candidate.strip()
+        if name and name not in chain:
+            chain.append(name)
+    return chain
 
 
-def endpoint_url() -> str | None:
-    return None
+def endpoint_url() -> str:
+    """The API base URL this client talks to, for /api/health and /api/config."""
+    base = _env("GEMINI_BASE_URL") or DEFAULT_BASE_URL
+    version = _env("GEMINI_API_VERSION") or DEFAULT_API_VERSION
+    return f"{base.rstrip('/')}/{version.strip('/')}"
 
 
 def key_present() -> bool:
-    """True when inference can run: either a token is set or weights are cached."""
-    return bool(hf_token()) or weights_cached()
+    """True when inference can run: a Gemini API key is set."""
+    return bool(api_key())
+
+
+def max_output_tokens() -> int:
+    return _int_env("GEMMA_MAX_OUTPUT_TOKENS", MAX_OUTPUT_TOKENS)
 
 
 # ---------------------------------------------------------------------------
@@ -106,323 +168,297 @@ class InferenceError(RuntimeError):
 
 
 class ModelUnavailable(InferenceError):
-    """Model saturated or unavailable."""
+    """A model-level failure that may not affect the next model in the chain.
 
+    ``retryable`` distinguishes the two cases that look alike from here:
+    a saturated endpoint is worth another try after a backoff, while a model
+    the API does not serve will fail identically forever.
 
-# ---------------------------------------------------------------------------
-# Singleton loader
-# ---------------------------------------------------------------------------
-
-_model = None
-_processor = None
-_model_device: str = "cpu"
-_load_lock = Lock()
-_load_error: str | None = None
-
-
-def _is_retryable(exc: BaseException) -> bool:
-    """True when a load failure is environmental and worth retrying later.
-
-    Out-of-memory and broken shared-library loads are transient (another process
-    freed VRAM, the user closed a memory-hungry app). Memoizing those would keep
-    the server permanently broken until a restart.
+    ``max_attempts`` caps how many times this specific failure is retried
+    against the same model. A timeout that has already consumed its full HTTP
+    budget should be tried once more, not three times: three 120s timeouts are
+    six minutes of apparent hang before the chain moves on.
     """
-    if isinstance(exc, MemoryError):
-        return True
-    if isinstance(exc, OSError):
-        return True
-    text = str(exc).lower()
-    return "out of memory" in text or "cuda" in text
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = True,
+        max_attempts: int | None = None,
+    ):
+        super().__init__(message)
+        self.retryable = retryable
+        self.max_attempts = max_attempts
 
 
-def _get_model_and_processor():
-    """Return (model, processor), loading from disk on first call (thread-safe)."""
-    global _model, _processor, _model_device, _load_error
+class ConfigurationError(InferenceError):
+    """A setup problem the operator can fix without restarting the process.
 
-    if _load_error is not None:
-        raise InferenceError(f"Model failed to load previously: {_load_error}")
-    if _model is not None and _processor is not None:
-        return _model, _processor
-
-    with _load_lock:
-        if _model is not None and _processor is not None:
-            return _model, _processor
-        if _load_error is not None:
-            raise InferenceError(f"Model failed to load previously: {_load_error}")
-
-        try:
-            import torch  # type: ignore
-            from transformers import AutoProcessor  # type: ignore
-
-            mid = model_id()
-            token = hf_token() or None
-
-            cuda_ok = torch.cuda.is_available()
-            if cuda_ok:
-                dtype = torch.float16          # fp16 — efficient on RTX 3050
-                _model_device = "cuda"
-                logger.info(
-                    "CUDA detected — loading '%s' in float16 (GPU cap: %s, "
-                    "CPU overflow: %s)", mid, _GPU_MEM_CAP, _CPU_MEM_CAP,
-                )
-            else:
-                dtype = torch.float32
-                dev_map = None
-                max_mem = None
-                _model_device = "cpu"
-                logger.info("No CUDA — loading '%s' on CPU in float32", mid)
-
-            load_kwargs: dict = dict(
-                torch_dtype=dtype,
-                low_cpu_mem_usage=True,
-                token=token,
-            )
-
-            model_obj = None
-            _last_load_error = "no candidate model class available"
-
-            # Placement attempts: whole model on the GPU first (fastest), then
-            # device_map="auto" with a VRAM ceiling so accelerate offloads the
-            # overflow to CPU instead of raising CUDA OOM.
-            placements: list[tuple] = (
-                [("cuda", None), ("auto", {0: _GPU_MEM_CAP, "cpu": _CPU_MEM_CAP})]
-                if cuda_ok
-                else [(None, None)]
-            )
-
-            # Candidate model classes: the architecture the checkpoint actually
-            # declares comes first, then generic Auto classes. Guessing a fixed
-            # order loads a wrong-architecture model silently, which fails later
-            # during generation instead of here.
-            candidates: list[str] = []
-            try:
-                import transformers  # type: ignore
-                from transformers import AutoConfig  # type: ignore
-
-                cfg = AutoConfig.from_pretrained(mid, token=token)
-                for arch in getattr(cfg, "architectures", None) or []:
-                    if arch not in candidates:
-                        candidates.append(arch)
-            except Exception as exc:
-                logger.debug("Could not read model architecture: %s", exc)
-
-            for fallback in ("AutoModelForImageTextToText", "AutoModelForVision2Seq"):
-                if fallback not in candidates:
-                    candidates.append(fallback)
-
-            import transformers as _tf  # type: ignore
-
-            for dev_map, max_mem in placements:
-                kwargs = dict(load_kwargs)
-                if dev_map:
-                    kwargs["device_map"] = dev_map
-                if max_mem:
-                    kwargs["max_memory"] = max_mem
-
-                for cls_name in candidates:
-                    model_cls = getattr(_tf, cls_name, None)
-                    if model_cls is None or not hasattr(model_cls, "from_pretrained"):
-                        logger.debug("transformers has no class %s", cls_name)
-                        continue
-                    try:
-                        model_obj = model_cls.from_pretrained(mid, **kwargs)
-                        logger.info(
-                            "Loaded model with class %s (device_map=%s)",
-                            cls_name, dev_map,
-                        )
-                        break
-                    except (ImportError, OSError, ValueError, TypeError, RuntimeError) as exc:
-                        model_obj = None
-                        _last_load_error = f"{cls_name}: {exc}"
-                        logger.debug("Class %s not usable: %s", cls_name, exc)
-                        continue
-
-                if model_obj is not None:
-                    break
-
-            if model_obj is None:
-                raise InferenceError(
-                    f"Could not load '{mid}' with any supported model class. "
-                    f"Last error — {_last_load_error}"
-                )
-
-            proc = AutoProcessor.from_pretrained(mid, token=token)
-
-            if not cuda_ok:
-                model_obj = model_obj.to("cpu")
-
-            model_obj.eval()
-            _model = model_obj
-            _processor = proc
-
-            if cuda_ok:
-                allocated = torch.cuda.memory_allocated(0) / 1024 ** 3
-                total = torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
-                logger.info(
-                    "Model ready on GPU. VRAM used: %.2f / %.2f GiB", allocated, total
-                )
-            else:
-                logger.info("Model ready on CPU.")
-
-            return _model, _processor
-
-        except InferenceError:
-            raise
-        except MemoryError as exc:
-            _load_error = "Out of memory loading model weights."
-            raise InferenceError(_load_error) from exc
-        except Exception as exc:
-            if _is_retryable(exc):
-                _load_error = None
-            else:
-                _load_error = str(exc)[:400]
-            raise InferenceError(
-                f"Failed to load local model '{model_id()}': {str(exc)[:400]}"
-            ) from exc
-
-
-# ---------------------------------------------------------------------------
-# Image helper
-# ---------------------------------------------------------------------------
-
-
-def _pil_from_validated(image: validation.ValidatedImage):
-    try:
-        from PIL import Image  # type: ignore
-        return Image.open(io.BytesIO(image.data)).convert("RGB")
-    except Exception as exc:
-        raise InferenceError(f"Could not decode image for model input: {exc}") from exc
-
-
-# ---------------------------------------------------------------------------
-# Core generation helpers
-# ---------------------------------------------------------------------------
-
-
-def _inputs_to_device(inputs: dict, model):
-    """Move all tensor values in inputs to the same device as the model."""
-    torch = _torch()
-    if torch is None or _model_device != "cuda":
-        return inputs
-    try:
-        if not torch.cuda.is_available():
-            return inputs
-        dev = next(model.parameters()).device
-        return {k: v.to(dev) if hasattr(v, "to") else v for k, v in inputs.items()}
-    except Exception:
-        return inputs
-
-
-def _build_inputs(processor, messages: list[dict], pil_image=None):
+    Kept distinct from other failures because it must never be memoized: a key
+    pasted into .env under a running --reload server should start working
+    immediately, not be poisoned by the first request that lacked it.
     """
-    Build processor inputs compatible with Qwen2-VL, Gemma3, and other VLMs.
 
-    Strategy:
-      1. apply_chat_template(tokenize=False) → text string
-      2. processor(text, images) → tokenized tensor dict
-    Falls back to the single-call tokenize=True API if step 1 fails.
-    """
-    # --- Two-step (recommended for Qwen2-VL, SmolVLM and most modern VLMs) ---
-    # `except ... as name` unbinds the name at block exit, so both failures are
-    # copied into names that outlive their handler.
-    two_step_error: Exception | None = None
-    try:
-        text = processor.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
+
+# ---------------------------------------------------------------------------
+# Client singleton
+# ---------------------------------------------------------------------------
+
+_client: Any = None
+_client_lock = Lock()
+_client_error: str | None = None
+
+
+def _build_client():
+    """Construct a Gemini API client bound to the configured key and endpoint."""
+    key = api_key()
+    if not key:
+        raise ConfigurationError(
+            "No Gemini API key is set. Add GEMINI_API_KEY to your .env file "
+            "(create one at https://aistudio.google.com/apikey) and restart the app."
         )
-        kwargs: dict = dict(text=[text], padding=True, return_tensors="pt")
-        if pil_image is not None:
-            kwargs["images"] = [pil_image]
-        return processor(**kwargs)
-    except Exception as exc:
-        two_step_error = exc
-        logger.debug("Two-step processor call failed (%s), trying single-call", exc)
 
-    # --- Single-call fallback (Gemma3 / older VLMs) -------------------------
-    # The image must be forwarded here too: dropping it would make the model
-    # describe a prompt with no visual input at all.
     try:
-        template_kwargs: dict = {}
-        if pil_image is not None:
-            template_kwargs["images"] = [pil_image]
-        return processor.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
-            **template_kwargs,
+        from google import genai
+        from google.genai import types
+    except ImportError as exc:
+        raise InferenceError(
+            "The google-genai package is not installed. Run: pip install -r requirements.txt"
+        ) from exc
+
+    try:
+        options: dict[str, Any] = {}
+        base = _env("GEMINI_BASE_URL")
+        version = _env("GEMINI_API_VERSION")
+        if base:
+            options["base_url"] = base
+        if version:
+            options["api_version"] = version
+        timeout_ms = _call_timeout_ms()
+        options["timeout"] = timeout_ms
+        return genai.Client(
+            api_key=key,
+            http_options=types.HttpOptions(**options) if options else None,
         )
+    except InferenceError:
+        raise
     except Exception as exc:
         raise InferenceError(
-            f"Processor could not encode the prompt/image. "
-            f"Two-step error: {two_step_error}. Single-call error: {exc}."
+            f"Could not initialize the Gemini API client: {str(exc)[:300]}"
         ) from exc
 
 
-_torch_cache: list = []  # [torch] on success, [None] once an import has failed
+def _get_client():
+    """Return the shared client, creating it on first call (thread-safe).
 
-
-def _torch():
-    """Import torch if it is usable here, else None.
-
-    The failure is remembered: a broken install is not fixed between requests,
-    and re-importing a DLL that cannot load is slow and can destabilize the
-    process.
+    A broken SDK install or an unusable endpoint is remembered for the process
+    lifetime: neither fixes itself between requests, and re-attempting on every
+    upload would add latency to every failure. A missing key is NOT remembered
+    (see ConfigurationError).
     """
-    if _torch_cache:
-        return _torch_cache[0]
-    try:
-        import torch  # type: ignore
+    global _client, _client_error
 
-        _torch_cache.append(torch)
-        return torch
-    except Exception as exc:  # broken or missing CUDA/cuDNN install, low memory
-        logger.warning("torch is unavailable: %s", exc)
-        _torch_cache.append(None)
-        return None
+    if _client_error is not None:
+        raise InferenceError(f"Gemini API client failed to initialize: {_client_error}")
+    if _client is not None:
+        return _client
 
-
-def _run_generate(model, inputs: dict):
-    """Call model.generate(), handling OOM with a clear error."""
-    torch = _torch()
-    ctx = torch.inference_mode() if torch is not None else nullcontext()
-    try:
-        with ctx:
-            return model.generate(
-                **inputs,
-                max_new_tokens=MAX_NEW_TOKENS,
-                do_sample=False,
+    with _client_lock:
+        if _client is not None:
+            return _client
+        if _client_error is not None:
+            raise InferenceError(
+                f"Gemini API client failed to initialize: {_client_error}"
             )
+        try:
+            _client = _build_client()
+        except ConfigurationError:
+            # Recoverable in place: never poison the singleton over a missing key.
+            raise
+        except InferenceError as exc:
+            _client_error = str(exc)[:400]
+            raise
+        logger.info("Gemini API client ready. Endpoint: %s", endpoint_url())
+        return _client
+
+
+# ---------------------------------------------------------------------------
+# Error translation
+# ---------------------------------------------------------------------------
+
+
+def _status_of(exc: BaseException) -> int | None:
+    """The HTTP status carried by an SDK error, if it has one."""
+    for attr in ("code", "status_code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _message_of(exc: BaseException) -> str:
+    message = getattr(exc, "message", None)
+    if isinstance(message, str) and message.strip():
+        return message
+    return str(exc)
+
+
+def _looks_like_timeout(exc: BaseException) -> bool:
+    """True for a stalled/expired request rather than a server-side error."""
+    if isinstance(exc, TimeoutError):
+        return True
+    name = type(exc).__name__.lower()
+    if "timeout" in name or "deadline" in name:
+        return True
+    lowered = _message_of(exc).lower()
+    return "timed out" in lowered or "timeout" in lowered
+
+
+def _classify(exc: BaseException) -> InferenceError:
+    """Translate an SDK error into a user-facing error.
+
+    Model-level failures (saturation, a missing model, a 5xx) become
+    ModelUnavailable so the chain moves on; request-level failures stay fatal
+    because no other model would accept the request either.
+    """
+    status = _status_of(exc)
+    message = _message_of(exc)
+    lowered = message.lower()
+
+    if any(hint in lowered for hint in _FATAL_MESSAGE_HINTS):
+        return InferenceError(
+            "The Gemini API rejected this request: " f"{message[:300]}"
+        )
+    if status in (401, 403):
+        return InferenceError(
+            "The Gemini API key was rejected (HTTP {0}). Check GEMINI_API_KEY in your "
+            ".env file -- see https://aistudio.google.com/apikey".format(status)
+        )
+    if status == 404:
+        # The endpoint does not serve this id. Retrying it cannot help.
+        return ModelUnavailable(
+            f"Model not available on the Gemini API: {message[:200]}", retryable=False
+        )
+    if _looks_like_timeout(exc):
+        # Already consumed a full HTTP budget. One more try, then move on.
+        return ModelUnavailable(
+            f"The Gemini API did not respond within {_call_timeout_ms() // 1000}s.",
+            retryable=True,
+            max_attempts=2,
+        )
+    # Saturation and 5xx: the same model may well succeed shortly.
+    return ModelUnavailable(message[:300], retryable=True)
+
+
+def _call_once(model: str, contents: list[Any], config: Any) -> str:
+    """One generate_content() call, returning the reply text."""
+    client = _get_client()
+    try:
+        response = client.models.generate_content(
+            model=model, contents=contents, config=config
+        )
     except InferenceError:
         raise
-    except RuntimeError as exc:
-        msg = str(exc)
-        if "out of memory" in msg.lower():
-            # Free the cache and surface a clean user error
-            if torch is not None and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            raise InferenceError(
-                "GPU ran out of memory during generation. "
-                "Try a smaller image, or reduce MAX_NEW_TOKENS in ai_client.py."
-            ) from exc
-        raise InferenceError(f"Generation failed: {msg[:300]}") from exc
     except Exception as exc:
-        raise InferenceError(f"Generation failed unexpectedly: {str(exc)[:300]}") from exc
+        raise _classify(exc) from exc
+    return _response_text(response, model)
 
 
-def _decode(processor, generated, input_len: int) -> str:
-    """Decode only the newly generated tokens (strip the prompt prefix)."""
+def _response_text(response: Any, model: str) -> str:
+    """Pull the reply text out of a response, explaining an empty one.
+
+    An empty reply is almost always a safety filter or a finish reason rather
+    than a bug, so say which instead of failing with a decoding error.
+    """
+    text = ""
     try:
-        new_tokens = generated[:, input_len:]
-        text = processor.batch_decode(new_tokens, skip_special_tokens=True)[0].strip()
-    except Exception as exc:
-        raise InferenceError(f"Token decoding failed: {exc}") from exc
-    if not text:
-        raise InferenceError("The model returned an empty response.")
-    return text
+        text = response.text or ""
+    except (AttributeError, ValueError):
+        text = ""
+
+    if text.strip():
+        return text.strip()
+
+    reason = "the model returned an empty response"
+    try:
+        candidates = getattr(response, "candidates", None) or []
+        if candidates:
+            finish = getattr(candidates[0], "finish_reason", None)
+            if finish:
+                reason = f"the model stopped early ({finish})"
+        feedback = getattr(response, "prompt_feedback", None)
+        block = getattr(feedback, "block_reason", None)
+        if block:
+            reason = f"the request was blocked by a safety filter ({block})"
+    except Exception:
+        pass
+
+    raise InferenceError(f"{reason} while using '{model}'.")
+
+
+# ---------------------------------------------------------------------------
+# Request assembly
+# ---------------------------------------------------------------------------
+
+
+def _types():
+    """The SDK's schema module, or a user-facing error when it is missing."""
+    try:
+        from google.genai import types
+    except ImportError as exc:
+        raise InferenceError(
+            "The google-genai package is not installed. Run: pip install -r requirements.txt"
+        ) from exc
+    return types
+
+
+def _build_config():
+    """Generation config, with sampler knobs only when explicitly configured.
+
+    Gemma is served with the default sampler; sending a non-default
+    temperature or top_p is rejected, so both are omitted unless the operator
+    deliberately sets them.
+    """
+    types = _types()
+
+    kwargs: dict[str, Any] = {"max_output_tokens": max_output_tokens()}
+
+    temperature = _float_env("GEMMA_TEMPERATURE")
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    top_p = _float_env("GEMMA_TOP_P")
+    if top_p is not None:
+        kwargs["top_p"] = top_p
+
+    # response_mime_type / response_schema are intentionally NOT set: Gemma
+    # rejects JSON mode on this endpoint. See the module docstring.
+    return types.GenerateContentConfig(**kwargs)
+
+
+def _fuse(system_prompt: str, user_prompt: str) -> str:
+    """Join the system prompt and the request into one user turn.
+
+    Gemma rejects a system role outright, so the instruction block and the
+    per-request text are concatenated with a rule between them.
+    """
+    return f"{system_prompt.strip()}\n\n---\n\n{user_prompt.strip()}"
+
+
+def _build_image_contents(image: validation.ValidatedImage, system_prompt: str, user_prompt: str):
+    """A single user turn holding the image bytes and the fused prompt."""
+    types = _types()
+
+    part_image = types.Part.from_bytes(data=image.data, mime_type=image.mime)
+    part_text = types.Part.from_text(text=_fuse(system_prompt, user_prompt))
+    return [types.Content(role="user", parts=[part_image, part_text])]
+
+
+def _build_text_contents(prompt: str):
+    """A single user turn holding only text, for corrective retries."""
+    types = _types()
+
+    return [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
 
 
 # ---------------------------------------------------------------------------
@@ -430,43 +466,48 @@ def _decode(processor, generated, input_len: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _generate(pil_image, system_prompt: str, user_prompt: str) -> str:
-    """Run one multimodal generation round. Returns raw text."""
-    model, processor = _get_model_and_processor()
+def _call_chain(contents: list[Any], config: Any) -> tuple[str, str, list[str]]:
+    """Run one generation, walking the model chain on model-level failures.
 
-    messages = [
-        {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": pil_image},
-                {"type": "text", "text": user_prompt},
-            ],
-        },
-    ]
+    Returns (text, model_used, fallbacks_skipped).
+    """
+    chain = model_chain()
+    last: InferenceError | None = None
 
-    inputs = _build_inputs(processor, messages, pil_image=pil_image)
-    input_len = inputs["input_ids"].shape[-1] if "input_ids" in inputs else 0
-    inputs = _inputs_to_device(inputs, model)
+    for index, model in enumerate(chain):
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            try:
+                return _call_once(model, contents, config), model, chain[:index]
+            except ModelUnavailable as exc:
+                last = exc
+                # A saturated endpoint is worth a short backoff. A model the
+                # API does not serve is not: hand off at once. A failure may
+                # also cap its own attempts (a timeout has already spent its
+                # budget, so retrying it three times just multiplies the wait).
+                ceiling = (
+                    exc.max_attempts
+                    if exc.max_attempts is not None
+                    else len(RETRY_DELAYS) + 1
+                )
+                if not exc.retryable or attempt + 1 >= ceiling:
+                    break
+                _SLEEP(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)])
+            except InferenceError:
+                raise
 
-    generated = _run_generate(model, inputs)
-    return _decode(processor, generated, input_len)
+    raise last or InferenceError("No model in the chain is available.")
 
 
-def _generate_text_only(prompt: str) -> str:
+def _generate(
+    image: validation.ValidatedImage, system_prompt: str, user_prompt: str
+) -> tuple[str, str, list[str]]:
+    """Run one multimodal generation round. Returns (text, model, fallbacks)."""
+    return _call_chain(_build_image_contents(image, system_prompt, user_prompt), _build_config())
+
+
+def _generate_text_only(prompt: str) -> tuple[str, str, list[str]]:
     """Text-only generation for corrective retries (no image)."""
-    model, processor = _get_model_and_processor()
-
-    messages = [
-        {"role": "user", "content": [{"type": "text", "text": prompt}]}
-    ]
-
-    inputs = _build_inputs(processor, messages, pil_image=None)
-    input_len = inputs["input_ids"].shape[-1] if "input_ids" in inputs else 0
-    inputs = _inputs_to_device(inputs, model)
-
-    generated = _run_generate(model, inputs)
-    return _decode(processor, generated, input_len)
+    return _call_chain(_build_text_contents(prompt), _build_config())
 
 
 # ---------------------------------------------------------------------------
@@ -479,7 +520,7 @@ def _repair_diagram(
 ) -> tuple[str | None, str | None]:
     try:
         repair_content = diagram_mod.build_repair_prompt(raw_source, error, expected_type=expected_type)
-        fixed = _generate_text_only(repair_content)
+        fixed, _model, _fallbacks = _generate_text_only(repair_content)
     except InferenceError as exc:
         return None, f"Diagram repair could not run: {exc}"
 
@@ -535,21 +576,34 @@ def _extract_diagram(
         return None
 
 
+def _record_model(telemetry: dict, model_used: str, fallbacks: list[str]) -> None:
+    """Fold a completed call's model choice into the response telemetry.
+
+    Replaces rather than accumulates: the extraction on screen came from the
+    last successful call, so its model is the one reported. Stacking the skip
+    lists of every attempt would describe a chain walk that never happened --
+    a retry that lands back on the primary must not leave the primary listed
+    as skipped.
+    """
+    telemetry["model_used"] = model_used
+    telemetry["model_fallbacks"] = list(fallbacks)
+
+
 def analyze(
     image: validation.ValidatedImage, mode: str = "auto"
 ) -> tuple[validation.Extraction, dict]:
-    """Run a full extraction using local VLM inference.
+    """Run a full extraction using cloud Gemma inference.
 
     Returns (extraction, telemetry).
     """
-    mid = model_id()
+    chain = model_chain()
     telemetry: dict = {
-        "model": mid,
-        "model_chain": [mid],
-        "model_used": mid,
+        "model": chain[0],
+        "model_chain": chain,
+        "model_used": chain[0],
         "model_fallbacks": [],
         "mode": mode,
-        "endpoint": "local",
+        "endpoint": endpoint_url(),
         "attempts": 0,
         "diagram_attempts": 0,
         "elapsed_ms": 0,
@@ -558,14 +612,14 @@ def analyze(
 
     sys_prompt = prompts.build_system_prompt(mode)
     usr_prompt = prompts.build_user_prompt(mode)
-    pil_image = _pil_from_validated(image)
 
     try:
-        text = _generate(pil_image, sys_prompt, usr_prompt)
-        telemetry["attempts"] = 1
+        text, model_used, fallbacks = _generate(image, sys_prompt, usr_prompt)
     except InferenceError:
         telemetry["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
         raise
+    telemetry["attempts"] = 1
+    _record_model(telemetry, model_used, fallbacks)
 
     payload = validation.extract_json_object(text)
     if payload is None:
@@ -576,7 +630,8 @@ def analyze(
             f"Here is what you previously returned:\n\n{text[:2000]}"
         )
         try:
-            text = _generate_text_only(repair)
+            text, model_used, fallbacks = _generate_text_only(repair)
+            _record_model(telemetry, model_used, fallbacks)
             payload = validation.extract_json_object(text)
         except InferenceError:
             payload = None
@@ -608,8 +663,11 @@ def analyze(
             "do not repeat any part of the JSON template."
         )
         try:
-            retry_text = _generate(pil_image, sys_prompt, f"{usr_prompt}\n\n{strict}")
+            retry_text, model_used, fallbacks = _generate(
+                image, sys_prompt, f"{usr_prompt}\n\n{strict}"
+            )
             telemetry["attempts"] = 2
+            _record_model(telemetry, model_used, fallbacks)
             retry_payload = validation.extract_json_object(retry_text)
             if retry_payload is not None:
                 retry_diagram = _extract_diagram(retry_payload, telemetry)

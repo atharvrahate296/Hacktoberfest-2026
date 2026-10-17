@@ -5,12 +5,9 @@ python-multipart>=0.0.9
 python-dotenv>=1.0
 pillow>=10.0
 
-# Local AI inference - vision-language model via HuggingFace transformers
-torch>=2.2.0
-transformers>=4.50.0
-accelerate>=0.30.0
-huggingface_hub>=0.23.0
-sentencepiece>=0.1.99
+# Cloud AI inference - Gemma served by the Gemini API (Google AI Studio).
+# Gemma 3 4B/12B/27B and Gemma 4 accept image input on this endpoint.
+google-genai>=1.0
 
 # Tests only
 pytest>=8.0

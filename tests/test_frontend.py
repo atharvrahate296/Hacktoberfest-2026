@@ -28,8 +28,8 @@ def html() -> str:
 
 def test_model_is_not_hardcoded(html: str):
     # The badge is filled from /api/config; no model may ship as placeholder copy.
-    assert "Qwen/Qwen2-VL-2B-Instruct" not in html
     assert "Gemma" not in html
+    assert "gemma-3" not in html
     assert '<span id="modelTag">loading…</span>' in html
 
 
@@ -41,11 +41,32 @@ def test_model_copy_is_bound_to_config(html: str):
 def test_no_stale_model_as_a_configured_default():
     for name in ("readme.md", ".env.example"):
         text = io.open(ROOT / name, encoding="utf-8").read()
-        assert f"HF_MODEL_ID=google/gemma-3-27b-it" not in text
-        assert f"HF_MODEL_ID=Qwen/Qwen2-VL-2B-Instruct" not in text
-    assert 'HF_MODEL_ID=HuggingFaceTB/SmolVLM-500M-Instruct' in io.open(
-        ROOT / ".env.example", encoding="utf-8"
-    ).read()
+        assert "HF_MODEL_ID" not in text
+        assert "SmolVLM" not in text
+        assert "Qwen" not in text
+    env_example = io.open(ROOT / ".env.example", encoding="utf-8").read()
+    assert ai_client.DEFAULT_MODEL in env_example
+    assert "GEMMA_MODEL=" in env_example
+    assert "GEMINI_API_KEY=" in env_example
+
+
+def test_no_local_inference_copy_survives(html: str):
+    """The app is cloud-backed now; local-model promises would be false."""
+    for stale in (
+        "Runs locally on your own machine",
+        "Running the local model",
+        "Model weights not found",
+        "HF_TOKEN",
+        "huggingface.co/settings/tokens",
+        "a local vision-language model",
+    ):
+        assert stale not in html, f"stale local-inference copy: {stale!r}"
+
+
+def test_key_banner_points_at_google_ai_studio(html: str):
+    assert "GEMINI_API_KEY" in html
+    assert "aistudio.google.com/apikey" in html
+    assert '<span id="modelTag">loading…</span>' in html
 
 
 @pytest.mark.parametrize(
@@ -75,8 +96,31 @@ def test_render_guards_against_a_detached_panel(html: str):
 
 def test_svg_export_reads_the_rendered_node(html: str):
     assert 'id="dlSvgBtn"' in html
-    assert 'document.querySelector("#mmdMain svg")' in html
+    assert 'document.querySelector("#mmdMain svg")' in html or "function liveSvg" in html
     assert '"image/svg+xml"' in html
+
+
+def test_diagram_png_export(html: str):
+    """The SVG must be made standalone before rasterising: mermaid emits a
+    CSS-sized DOM fragment that an <img> refuses to load."""
+    assert 'id="dlPngBtn"' in html
+    assert "$('dlPngBtn').onclick" in html or '$("dlPngBtn").onclick = () => downloadDiagramPng(slug);' in html
+    assert "function downloadDiagramPng" in html
+    assert "function standaloneSvg" in html
+    assert 'setAttribute("xmlns"' in html
+    assert '"image/png"' in html
+    assert 'canvas.toBlob' in html
+
+
+def test_png_export_is_bounded(html: str):
+    # A wide ER diagram at 2x would exceed the canvas size limit.
+    assert "12000 / Math.max(width, height)" in html
+
+
+def test_mermaid_uses_native_text_labels(html: str):
+    """foreignObject labels are not drawn when an SVG is loaded as an <img>,
+    which would silently break the PNG export."""
+    assert "htmlLabels:false" in html
 
 
 def test_element_ids_are_unique(html: str):
@@ -98,8 +142,33 @@ def test_sample_gallery_is_wired(html: str):
     assert 'data-mode="${esc(s.mode)}"' in html
 
 
+def test_share_image_is_rendered_deterministically(html: str):
+    """The card is drawn with canvas 2D, never a model: formulas and
+    identifiers must survive byte-for-byte."""
+    assert "function downloadShareImage" in html
+    assert "canvas.toBlob" in html
+    assert '"image/png"' in html
+    # No model call involved in producing the image.
+    assert "generateContent" not in html
+    assert "generate_content" not in html
+
+
+def test_share_image_renders_every_section(html: str):
+    for field in ("d.title", "d.summary", "d.notes", "d.takeaways", "d.action_items"):
+        assert field in html, f"{field} missing from the share card"
+
+
+def test_share_image_is_wired_to_the_export_menu(html: str):
+    assert 'id="pngDl"' in html
+    assert '$("pngDl").onclick = () => downloadShareImage(d, slug);' in html
+
+
+def test_share_image_uses_high_dpi_scale(html: str):
+    assert "scale: 2" in html
+    assert "ctx.scale(CARD.scale, CARD.scale)" in html
+
+
 def test_failed_runs_show_diagnostics(html: str):
-    """An empty result must explain itself rather than render a blank page."""
     assert "function diagnosticsHtml" in html
     assert "${diagnosticsHtml(d, t)}" in html
     assert "t.raw_preview" in html

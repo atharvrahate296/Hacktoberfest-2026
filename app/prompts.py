@@ -1,7 +1,7 @@
 """Extraction prompts for turning messy visual thinking into structured knowledge.
 
-Implements detailed, mode-specific prompts for the local vision-language model
-across all required transformation modes:
+Implements detailed, mode-specific prompts for the Gemma vision-language model
+served by the Gemini API, across all required transformation modes:
 - Handwritten Notes to Structured Notes
 - Diagram to Flowchart
 - Brainstorming to Mind Map
