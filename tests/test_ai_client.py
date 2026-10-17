@@ -67,6 +67,7 @@ class TestProviderErrors:
         "status,match",
         [
             (401, "rejected the access token"),
+            (402, "insufficient credits"),
             (403, "rejected the access token"),
             (404, "was not found on Hugging Face"),
             (500, "returned status 500"),

@@ -127,10 +127,10 @@ def validate_upload(
     try:
         from PIL import Image, ImageOps
 
-        with Image.open(_BytesReader(data)) as im:
+        with Image.open(io.BytesIO(data)) as im:
             im.verify()
 
-        with Image.open(_BytesReader(data)) as im:
+        with Image.open(io.BytesIO(data)) as im:
             # Correct EXIF orientation where applicable
             transposed = ImageOps.exif_transpose(im)
             if transposed is not None and transposed is not im:

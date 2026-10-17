@@ -113,18 +113,23 @@ def _check_types(source: str) -> str:
 
 def _check_syntax_heuristics(source: str) -> None:
     """Cheap structural checks that catch the most common generation failures."""
+    first = source.splitlines()[0].strip()
+    check_source = source
+    if first.lower().startswith("erdiagram"):
+        # Strip ER relationship operators (e.g. ||--o{, }|..|{) so cardinalities aren't miscounted as delimiters
+        check_source = re.sub(r"[\|o}{]{1,2}(?:--|\.\.)[\|o}{]{1,2}", "", check_source)
+
     # Bracket/quote balance. Unbalanced delimiters are the single most common
     # defect in model-generated Mermaid and render as a hard failure.
     for opener, closer in (("[", "]"), ("(", ")"), ("{", "}")):
-        if source.count(opener) != source.count(closer):
+        if check_source.count(opener) != check_source.count(closer):
             raise DiagramError(
                 f"Unbalanced '{opener}{closer}' in the diagram "
-                f"({source.count(opener)} vs {source.count(closer)})."
+                f"({check_source.count(opener)} vs {check_source.count(closer)})."
             )
-    if source.count('"') % 2 != 0:
+    if check_source.count('"') % 2 != 0:
         raise DiagramError("Unbalanced double quotes in the diagram.")
 
-    first = source.splitlines()[0].strip()
     body = "\n".join(source.splitlines()[1:]).strip()
     if first.lower().startswith(("flowchart", "graph")) and not body:
         raise DiagramError("The diagram declared no nodes.")

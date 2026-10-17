@@ -78,7 +78,7 @@ def health() -> JSONResponse:
             "status": "ok" if ready else "needs_key",
             "api_key": "present" if ready else "missing",
             "model": ai_client.model_id(),
-            "endpoint": ai_client.endpoint_url() or "router.huggingface.co",
+            "endpoint": ai_client.endpoint_url() or "local",
             "modes": prompts.MODES,
             "supported_types": sorted(validation.ALLOWED_EXTENSIONS),
             "max_mb": validation.MAX_BYTES // (1024 * 1024),
@@ -93,7 +93,7 @@ def config() -> dict:
     return {
         "model": ai_client.model_id(),
         "api_key_present": ai_client.key_present(),
-        "endpoint": ai_client.endpoint_url() or "router.huggingface.co",
+        "endpoint": ai_client.endpoint_url() or "local",
         "max_mb": validation.MAX_BYTES // (1024 * 1024),
         "supported": sorted(validation.ALLOWED_EXTENSIONS),
         "modes": prompts.MODES,

@@ -190,9 +190,9 @@
   <div class="logo">Scribble<span>2</span>Structure</div>
   <div class="tag">From messy visual thinking to structured knowledge.</div>
   <div class="header-badges">
-    <div class="chip" id="modelTag">HF: google/gemma-3-27b-it</div>
-    <div class="chip" id="endpointTag">router.huggingface.co</div>
-    <div class="chip live" id="tokenTag">● Token Loaded</div>
+    <div class="chip" id="modelTag">Local: google/gemma-3-4b-it</div>
+    <div class="chip" id="endpointTag">local inference</div>
+    <div class="chip live" id="tokenTag">● Model Ready</div>
   </div>
 </header>
 
@@ -248,7 +248,7 @@
     </div>
 
     <p style="font-size:11px;color:var(--muted);margin:0;line-height:1.5">
-      Inference runs on Hugging Face using Google Gemma. Tokens stay server-side.
+      Inference runs locally using Google Gemma 3 4B via HuggingFace Transformers.
       Review AI outputs before relying on them.
     </p>
   </aside>
@@ -297,13 +297,13 @@ let configData = {};
 // Fetch config on load
 fetch("/api/config").then(r => r.json()).then(c => {
   configData = c;
-  if(c.model) $("modelTag").textContent = "HF: " + c.model;
-  if(c.endpoint) $("endpointTag").textContent = c.endpoint.replace(/^https?:\/\//, "").split("/")[0];
+  if(c.model) $("modelTag").textContent = "Local: " + c.model;
+  if(c.endpoint) $("endpointTag").textContent = c.endpoint === "local" ? "local inference" : c.endpoint.replace(/^https?:\/\//, "").split("/")[0];
   if(c.max_mb) $("maxMb").textContent = c.max_mb;
   if(!c.api_key_present) {
-    $("tokenTag").textContent = "⚠ Token Missing";
+    $("tokenTag").textContent = "⚠ Model Not Ready";
     $("tokenTag").className = "chip token-warn";
-    banner("warn", `<strong>Hugging Face token not detected.</strong> Set <code>HF_TOKEN</code> in your <code>.env</code> file (from <a href="https://huggingface.co/settings/tokens" target="_blank">huggingface.co/settings/tokens</a>) and restart.`);
+    banner("warn", `<strong>Model weights not found.</strong> Set <code>HF_TOKEN</code> in your <code>.env</code> file (from <a href="https://huggingface.co/settings/tokens" target="_blank">huggingface.co/settings/tokens</a>) so the weights can be downloaded on first run, then restart.`);
   }
 }).catch(() => {});
 
@@ -419,7 +419,7 @@ $("runBtn").onclick = async () => {
     <div class="loading">
       <span class="spinner" style="width:24px;height:24px"></span>
       <strong>Transcribing and Structuring Knowledge…</strong>
-      <div class="tele">Hugging Face Gemma is analyzing visual content (${$("modeSelect").value} mode)</div>
+      <div class="tele">Loading and running local Gemma model (${$("modeSelect").value} mode) — first run may take a while…</div>
     </div>`;
 
   const fd = new FormData();
