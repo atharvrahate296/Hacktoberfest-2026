@@ -30,6 +30,7 @@ def test_model_is_not_hardcoded(html: str):
     # The badge is filled from /api/config; no model may ship as placeholder copy.
     assert "Gemma" not in html
     assert "gemma-3" not in html
+    assert "flash-lite" not in html.lower()
     assert '<span id="modelTag">loading…</span>' in html
 
 

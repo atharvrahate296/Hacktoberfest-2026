@@ -1,4 +1,4 @@
-"""Cloud Gemma inference-client tests.
+"""Cloud inference-client tests for the Gemini API (Gemini or Gemma models).
 
 No network and no API key are used: the transport is scripted (see conftest)
 while request assembly, config, error translation, JSON repair, Mermaid
@@ -43,19 +43,25 @@ class TestModelNaming:
         monkeypatch.setenv("GEMINI_MODEL", "gemma-3-4b-it")
         assert ai_client.model_id() == "gemma-3-4b-it"
 
+    def test_both_families_are_configurable_through_one_variable(self, monkeypatch):
+        """GEMMA_MODEL is historical naming; Gemini ids must work too."""
+        for model in ("gemini-2.5-flash-lite", "gemini-2.5-flash", "gemma-3-27b-it"):
+            monkeypatch.setenv("GEMMA_MODEL", model)
+            assert ai_client.model_id() == model
+
     def test_model_chain_is_the_model_alone_by_default(self):
         assert ai_client.model_chain() == [ai_client.DEFAULT_MODEL]
 
     def test_model_chain_appends_fallbacks_without_duplicates(self, monkeypatch):
-        monkeypatch.setenv("GEMMA_MODEL_FALLBACKS", "gemma-3-12b-it, gemma-3-4b-it")
+        monkeypatch.setenv("GEMMA_MODEL_FALLBACKS", "gemini-2.5-flash, gemma-3-4b-it")
         assert ai_client.model_chain() == [
-            "gemma-3-27b-it",
-            "gemma-3-12b-it",
+            ai_client.DEFAULT_MODEL,
+            "gemini-2.5-flash",
             "gemma-3-4b-it",
         ]
 
     def test_a_fallback_naming_the_primary_is_not_repeated(self, monkeypatch):
-        monkeypatch.setenv("GEMMA_MODEL_FALLBACKS", "gemma-3-27b-it")
+        monkeypatch.setenv("GEMMA_MODEL_FALLBACKS", ai_client.DEFAULT_MODEL)
         assert ai_client.model_chain() == [ai_client.DEFAULT_MODEL]
 
     def test_endpoint_is_the_gemini_api(self):
@@ -72,6 +78,10 @@ class TestModelNaming:
         """The 1B Gemma 3 size is text-only and would fail on every upload."""
         assert "gemma-3-1b-it" not in ai_client.KNOWN_MODELS
 
+    def test_known_models_span_both_families(self):
+        assert any(m.startswith("gemini") for m in ai_client.KNOWN_MODELS)
+        assert any(m.startswith("gemma") for m in ai_client.KNOWN_MODELS)
+
     def test_telemetry_reports_configured_model(self, image, client_env):
         client_env(replies=[reply_json({"title": "T", "notes": []})])
         _, telemetry = ai_client.analyze(image)
@@ -81,14 +91,15 @@ class TestModelNaming:
         assert telemetry["model_fallbacks"] == []
 
     def test_docs_and_env_example_match_default(self):
+        """The shipped default must not drift from the documented one."""
         readme = io.open(ROOT / "readme.md", encoding="utf-8").read()
         env_example = io.open(ROOT / ".env.example", encoding="utf-8").read()
         assert f"GEMMA_MODEL={ai_client.DEFAULT_MODEL}" in readme
-        # .env.example leaves the value blank on purpose so the code default
-        # wins; the documented model must still be listed there.
-        env_text = io.open(ROOT / ".env.example", encoding="utf-8").read()
-        assert ai_client.DEFAULT_MODEL in env_text
-        assert "GEMMA_MODEL=" in env_text
+        assert f"GEMMA_MODEL={ai_client.DEFAULT_MODEL}" in env_example
+        # Every documented id must be one the client knows how to name.
+        for model in ai_client.KNOWN_MODELS:
+            assert model in readme, f"{model} is undocumented"
+            assert model in env_example, f"{model} is missing from .env.example"
 
     def test_env_example_documents_the_api_key(self):
         env_example = io.open(ROOT / ".env.example", encoding="utf-8").read()
@@ -177,7 +188,8 @@ class TestRequestAssembly:
 
         texts = text_parts(client.calls[0]["contents"])
         assert len(texts) == 1
-        # Gemma rejects a system role, so both blocks arrive in one user turn.
+        # Both prompt blocks arrive in one user turn, because Gemma
+        # rejects a system role.
         assert "Database ER Diagram" in texts[0]
         assert "Return ONLY a single valid JSON object" in texts[0]
         assert "---" in texts[0]
@@ -188,7 +200,7 @@ class TestRequestAssembly:
         assert {c.role for c in client.calls[0]["contents"]} == {"user"}
 
     def test_json_mode_is_never_requested(self, image, client_env):
-        """Gemma rejects response_mime_type/response_schema outright."""
+        """JSON mode is never requested; every Gemma id rejects it."""
         client = client_env(replies=[reply_json({"title": "T", "notes": []})])
         ai_client.analyze(image)
 
@@ -203,7 +215,7 @@ class TestRequestAssembly:
         assert client.calls[0]["config"].system_instruction is None
 
     def test_sampler_knobs_are_omitted_by_default(self, image, client_env):
-        """Gemma is served with the default sampler; others are rejected."""
+        """Omitted so one config works for both families: Gemma takes only the default sampler."""
         client = client_env(replies=[reply_json({"title": "T", "notes": []})])
         ai_client.analyze(image)
 
@@ -286,6 +298,7 @@ class TestErrorTranslation:
     def test_saturation_retries_then_falls_back(
         self, image, client_env, no_real_sleeps
     ):
+        primary = ai_client.DEFAULT_MODEL
         client = client_env(
             replies=[
                 reply_json(
@@ -294,46 +307,47 @@ class TestErrorTranslation:
             ],
             error=FakeAPIError("Resource has been exhausted", 429),
             error_on=[1, 2, 3],
-            chain="gemma-3-12b-it",
+            chain="gemini-2.5-flash",
         )
         ext, telemetry = ai_client.analyze(image)
 
         assert ext.title == "Recovered"
         assert [c["model"] for c in client.calls] == [
-            "gemma-3-27b-it",
-            "gemma-3-27b-it",
-            "gemma-3-27b-it",
-            "gemma-3-12b-it",
+            primary,
+            primary,
+            primary,
+            "gemini-2.5-flash",
         ]
-        assert telemetry["model_used"] == "gemma-3-12b-it"
-        assert telemetry["model_fallbacks"] == ["gemma-3-27b-it"]
+        assert telemetry["model_used"] == "gemini-2.5-flash"
+        assert telemetry["model_fallbacks"] == [primary]
         assert len(no_real_sleeps) == 2
 
     def test_a_missing_model_is_skipped_without_retrying(self, image, client_env):
+        primary = ai_client.DEFAULT_MODEL
         client = client_env(
             replies=[
                 reply_json(
                     {"title": "Recovered", "notes": [{"heading": "H", "content": ["C"]}]}
                 )
             ],
-            error=FakeAPIError("models/gemma-3-27b-it is not found", 404),
+            error=FakeAPIError(f"models/{primary} is not found", 404),
             error_on=1,
-            chain="gemma-3-12b-it",
+            chain="gemini-2.5-flash",
         )
         _ext, telemetry = ai_client.analyze(image)
-        assert telemetry["model_used"] == "gemma-3-12b-it"
+        assert telemetry["model_used"] == "gemini-2.5-flash"
         # A model the API does not serve must not burn the backoff budget.
-        assert [c["model"] for c in client.calls] == ["gemma-3-27b-it", "gemma-3-12b-it"]
+        assert [c["model"] for c in client.calls] == [primary, "gemini-2.5-flash"]
 
     def test_an_exhausted_chain_raises_the_last_error(self, image, client_env):
         client = client_env(
-            error=FakeAPIError("Service unavailable", 503), chain="gemma-3-12b-it"
+            error=FakeAPIError("Service unavailable", 503), chain="gemini-2.5-flash"
         )
         with pytest.raises(ai_client.InferenceError, match="Service unavailable"):
             ai_client.analyze(image)
         assert {c["model"] for c in client.calls} == {
-            "gemma-3-27b-it",
-            "gemma-3-12b-it",
+            ai_client.DEFAULT_MODEL,
+            "gemini-2.5-flash",
         }
 
     def test_unparseable_output_degrades_gracefully(self, image, client_env):
@@ -352,22 +366,26 @@ class TestErrorTranslation:
         succeeds on the primary. Stacking the skip lists would report the
         primary as both used and skipped.
         """
+        primary = ai_client.DEFAULT_MODEL
         client = client_env(
-            replies=[json.dumps(TestEmptyContentRetry.EMPTY), json.dumps(TestEmptyContentRetry.REAL)],
+            replies=[
+                json.dumps(TestEmptyContentRetry.EMPTY),
+                json.dumps(TestEmptyContentRetry.REAL),
+            ],
             error=FakeAPIError("Resource has been exhausted", 429),
             error_on=[1, 2, 3],
-            chain="gemma-3-12b-it",
+            chain="gemini-2.5-flash",
         )
         ext, telemetry = ai_client.analyze(image, mode="flowchart")
 
         assert ext.title == "OS Process State Model"
-        assert telemetry["model_used"] == "gemma-3-27b-it"
+        assert telemetry["model_used"] == primary
         assert telemetry["model_fallbacks"] == []
         assert [c["model"] for c in client.calls][:4] == [
-            "gemma-3-27b-it",
-            "gemma-3-27b-it",
-            "gemma-3-27b-it",
-            "gemma-3-12b-it",
+            primary,
+            primary,
+            primary,
+            "gemini-2.5-flash",
         ]
 
     def test_the_reported_model_is_the_one_that_served_the_reply(
@@ -382,11 +400,11 @@ class TestErrorTranslation:
             ],
             error=FakeAPIError("Resource has been exhausted", 429),
             error_on=[1, 2, 3],
-            chain="gemma-3-12b-it",
+            chain="gemini-2.5-flash",
         )
         _ext, telemetry = ai_client.analyze(image)
-        assert telemetry["model_used"] == "gemma-3-12b-it"
-        assert telemetry["model_fallbacks"] == ["gemma-3-27b-it"]
+        assert telemetry["model_used"] == "gemini-2.5-flash"
+        assert telemetry["model_fallbacks"] == [ai_client.DEFAULT_MODEL]
 
 
 class TestEmptyContentRetry:

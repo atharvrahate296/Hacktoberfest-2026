@@ -1,26 +1,35 @@
-"""Cloud inference client for Scribble2Structure -- Gemma via the Gemini API.
+"""Cloud inference client for Scribble2Structure -- Gemini API.
 
 Handles:
   1. Build one Gemini API client from the API key (module-level singleton).
   2. Build a multimodal user turn from the uploaded image + mode prompt.
-  3. Call generate_content() on the configured Gemma model and read the reply.
+  3. Call generate_content() on the configured model and read the reply.
   4. Walk a model chain, moving to the next model when one is saturated.
   5. Parse the JSON object out of the reply (with at most 1 corrective retry).
   6. Validate the Mermaid diagram (with at most 1 corrective retry).
   7. Normalize everything into an Extraction.
 
-Gemma on the Gemini API has three constraints that shape this module. None of
-them are workarounds; they are the only way the API accepts a Gemma request:
+The configured model defaults to ``gemini-2.5-flash-lite``. It may also be a
+Gemma id (Gemma 3 4B/12B/27B, Gemma 4), which share the endpoint and accept
+images, so the request is built to the *safest common denominator* of both
+families rather than to the capabilities of whichever one is configured:
 
-  * No JSON mode. Passing ``response_mime_type="application/json"`` fails with
-    ``"JSON mode is not enabled for models/<id>"``. The JSON schema therefore
-    lives in the prompt (app/prompts.py) and the reply is parsed afterwards,
-    which is what this app already did when it ran small local models, and the
-    corrective retries below are what make it reliable for cloud inference.
-  * No system role. Gemma was not trained with one, so ``system_instruction`` is
-    rejected. The system prompt is folded into the single user turn.
-  * Few sampling knobs. Gemma accepts the default sampler, so ``temperature``
-    and ``top_p`` are sent only when explicitly configured in the environment.
+  * No JSON mode. ``response_mime_type``/``response_schema`` are rejected by
+    every Gemma id ("JSON mode is not enabled for models/<id>"). The JSON
+    schema therefore lives in the prompt (app/prompts.py) and the reply is
+    parsed afterwards. Gemini could honour a response schema, but relying on it
+    would make the app silently model-dependent, so the prompt-driven contract
+    is kept for both.
+  * No system role. Gemma was not trained with one and rejects
+    ``system_instruction``, so the system prompt is folded into the single user
+    turn. This is accepted by Gemini too.
+  * No sampler knobs unless configured. Gemma is served with the default
+    sampler, so ``temperature`` and ``top_p`` are omitted unless the operator
+    sets them, rather than being sent with a value Gemini would honour and
+    Gemma would reject.
+
+That conservatism costs a little of what Gemini could offer, and buys one
+codebase that keeps working if ``GEMMA_MODEL`` is pointed at a Gemma id.
 
 Images are sent inline as base64 in the request; nothing is written to disk.
 """
@@ -46,11 +55,16 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL = "gemma-3-27b-it"
+DEFAULT_MODEL = "gemini-2.5-flash-lite"
 
-# Served by Google on the Gemini API. Only the 4B/12B/27B Gemma 3 sizes accept
-# image input; 1B is text-only and is deliberately absent.
+# Vision-capable ids served by the Gemini API, Gemini first. The env var is
+# named GEMMA_MODEL for continuity, but any of these may be set there.
+#
+# Gemma 3 4B/12B/27B and Gemma 4 accept image input. The Gemma 3 1B size is
+# text-only and is deliberately absent.
 KNOWN_MODELS = (
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
     "gemma-3-27b-it",
     "gemma-3-12b-it",
     "gemma-3-4b-it",
@@ -61,8 +75,9 @@ KNOWN_MODELS = (
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com"
 DEFAULT_API_VERSION = "v1beta"
 
-# Gemma 3 caps generation at 8192 tokens, so this is comfortably inside it and
-# still leaves room for a full Mermaid diagram plus the notes payload.
+# Enough room for a full Mermaid diagram plus the notes payload. Comfortably
+# inside both ceilings: Gemma 3 caps generation at 8192 tokens and
+# gemini-2.5-flash-lite at 65536.
 MAX_OUTPUT_TOKENS = 4096
 
 # How much of the model's own reply to keep for diagnosis when a run yields
@@ -414,11 +429,12 @@ def _types():
 
 
 def _build_config():
-    """Generation config, with sampler knobs only when explicitly configured.
+    """Generation config restricted to what every supported model accepts.
 
-    Gemma is served with the default sampler; sending a non-default
-    temperature or top_p is rejected, so both are omitted unless the operator
-    deliberately sets them.
+    Sampler knobs are omitted unless explicitly configured, and JSON mode and
+    system instructions are never requested. See the module docstring: the
+    default model is Gemini, but a Gemma id must keep working from the same
+    codebase, so the config stays at their intersection.
     """
     types = _types()
 
@@ -431,8 +447,8 @@ def _build_config():
     if top_p is not None:
         kwargs["top_p"] = top_p
 
-    # response_mime_type / response_schema are intentionally NOT set: Gemma
-    # rejects JSON mode on this endpoint. See the module docstring.
+    # response_mime_type / response_schema are intentionally NOT set: every
+    # Gemma id rejects JSON mode on this endpoint. See the module docstring.
     return types.GenerateContentConfig(**kwargs)
 
 
@@ -440,7 +456,8 @@ def _fuse(system_prompt: str, user_prompt: str) -> str:
     """Join the system prompt and the request into one user turn.
 
     Gemma rejects a system role outright, so the instruction block and the
-    per-request text are concatenated with a rule between them.
+    per-request text are concatenated with a rule between them. Gemini accepts
+    the same shape, which keeps one request format for both families.
     """
     return f"{system_prompt.strip()}\n\n---\n\n{user_prompt.strip()}"
 
@@ -592,7 +609,7 @@ def _record_model(telemetry: dict, model_used: str, fallbacks: list[str]) -> Non
 def analyze(
     image: validation.ValidatedImage, mode: str = "auto"
 ) -> tuple[validation.Extraction, dict]:
-    """Run a full extraction using cloud Gemma inference.
+    """Run a full extraction using cloud inference via the Gemini API.
 
     Returns (extraction, telemetry).
     """

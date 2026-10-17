@@ -6,28 +6,34 @@ Scribble2Structure turns handwritten notes, whiteboard photographs, brainstormin
 sketches, technical system drawings and meeting notes into structured artifacts with
 rendered Mermaid diagrams, verifiable action plans and multi-format exports.
 
-Inference runs in the cloud on **Gemma**, served by the **Gemini API**
-(Google AI Studio). There is no model to download, no GPU, and no VRAM to budget —
-a single API key and a `GEMMA_MODEL` value in `.env` are the whole setup. Your uploaded
+Inference runs in the cloud through the **Gemini API** (Google AI Studio), defaulting to
+**`gemini-2.5-flash-lite`** — Google's cheapest, fastest multimodal model, recommended for
+high-volume data extraction. There is no model to download, no GPU, and no VRAM to budget.
+A single API key plus a `GEMMA_MODEL` value in `.env` are the whole setup. Your uploaded
 images are sent to Google's servers to be analysed, so this is **not** an offline tool.
 
 ---
 
 ## Choosing a model
 
-Gemma's vision sizes are served by the Gemini API. Extraction quality scales with the
-model, and so does latency and cost. **This project is designed around that tradeoff:**
-the same codebase runs the 4B or the 27B with no code change — only the `GEMMA_MODEL`
-value in `.env`.
+`GEMMA_MODEL` accepts any vision-capable id the Gemini API serves — Gemini or Gemma. The
+name is historical; both families work from the same codebase, and picking one is a
+quality/latency/cost tradeoff, nothing more.
 
-| `GEMMA_MODEL` | Params | Image input | Notes |
+| `GEMMA_MODEL` | Family | Image input | Notes |
 | --- | --- | --- | --- |
-| `gemma-3-27b-it` *(default)* | 27B | yes | Strongest extraction: dense handwriting, many-box diagrams, ER keys. |
-| `gemma-3-12b-it` | 12B | yes | Faster and cheaper, weaker on crowded whiteboards. |
-| `gemma-3-4b-it` | 4B | yes | Fastest; best for wiring and layout checks, not dense notes. |
-| `gemma-4-26b-a4b-it` | 26B MoE | yes | Gemma 4 mixture-of-experts, if it is enabled on your key. |
+| `gemini-2.5-flash-lite` *(default)* | Gemini | yes | Cheapest and fastest; the API's recommendation for high-volume extraction. Thinking is off by default on this size. |
+| `gemini-2.5-flash` | Gemini | yes | Slower and pricier, stronger reasoning on dense images and multi-box diagrams. |
+| `gemma-3-27b-it` | Gemma | yes | Strongest open-weight extraction. |
+| `gemma-3-12b-it` | Gemma | yes | Lighter Gemma. |
+| `gemma-3-4b-it` | Gemma | yes | Lightest vision size. |
+| `gemma-4-26b-a4b-it` | Gemma | yes | Gemma 4 mixture-of-experts, if enabled on your key. |
 
 `gemma-3-1b-it` is deliberately absent: the 1B size is text-only and rejects every image.
+
+Output limit per model: 65,536 tokens for Gemini 2.5, 8,192 for Gemma 3. The app requests
+4,096 (`GEMMA_MAX_OUTPUT_TOKENS`), which is comfortably inside both and enough for a full
+Mermaid diagram plus the notes payload.
 
 ### Optional: a fallback chain
 
@@ -35,37 +41,49 @@ Set `GEMMA_MODEL_FALLBACKS` to a comma-separated list of ids to try in order whe
 primary is saturated, rate-limited, or not served on your key:
 
 ```ini
-GEMMA_MODEL_FALLBACKS=gemma-3-12b-it,gemma-3-4b-it
+GEMMA_MODEL_FALLBACKS=gemini-2.5-flash,gemma-3-27b-it
 ```
 
 It is empty by default, so a failure is reported rather than silently answered by a
-smaller model. Whichever model actually served the reply is reported in the response
-telemetry as `telemetry.model_used`, with `telemetry.model_fallbacks` listing what was
-skipped.
+different model. Whichever model actually served the reply is reported as
+`telemetry.model_used`, with `telemetry.model_fallbacks` listing what was skipped.
 
 ---
 
-## What "cloud" changes for the schema
+## What the API does and does not let us assume
 
-Gemma is served on the Gemini API without three features that Gemini models have. This
-is not a workaround; it is the only way the endpoint accepts a Gemma request, and it
-shapes `app/ai_client.py`:
+The two families share one endpoint but not one feature set. Because a Gemma id must keep
+working from the same `GEMMA_MODEL` setting, `app/ai_client.py` builds requests to the
+**intersection** of what both accept rather than to the capabilities of the configured one.
 
-| Feature | Gemini | Gemma here | What the app does instead |
+| Feature | Gemini | Gemma on this endpoint | What the app does |
 | --- | --- | --- | --- |
 | JSON mode / structured output | yes | **no** — `JSON mode is not enabled for models/gemma-3-27b-it` | The JSON schema ships in the prompt; the reply is parsed, with one corrective retry. |
 | System role | yes | **no** — `Developer instruction is not enabled for models/…` | The system prompt is folded into the single user turn. |
-| Sampler knobs | yes | default sampler only | `temperature` / `top_p` are omitted unless you set them explicitly. |
+| Sampler knobs | yes | default sampler only | `temperature` / `top_p` omitted unless explicitly set in `.env`. |
+| Thinking | on/off configurable | n/a | Not configured. Flash-Lite does not think by default, so no budget is stolen from the reply. |
 
-The prompt-driven JSON contract is why the corrective-retry machinery is not legacy
-code here — for Gemma it is the primary path, and it is covered by tests.
+That conservatism leaves some of Gemini's structured output unused. It buys one codebase
+that behaves identically whichever id you configure, instead of branching on the model name
+and silently changing extraction quality when someone edits `.env`.
+
+### A known `gemini-2.5-flash-lite` quirk
+
+Flash-Lite has a documented bug where it wraps its JSON in a markdown fence —
+a leading ` ```json ` and a trailing ` ``` ` — where `gemini-2.5-flash` returns bare
+JSON. The prompt-driven contract already tolerates this:
+`validation.extract_json_object()` strips fences before parsing, so fenced replies parse
+normally. This is handled rather than worked around, and is the main reason the fallback
+chain lists `gemini-2.5-flash` as a sensible next hop.
 
 ---
 
 ## Features
 
-- **Cloud inference, no local weights** — Gemma on the Gemini API; nothing to download,
-  nothing to fit in VRAM, selected entirely from `.env`.
+- **Cloud inference, no local weights** — Gemini API; nothing to download, nothing to fit
+  in VRAM, selected entirely from `.env`.
+- **Model-flexible** — Gemini or Gemma vision ids, with an optional fallback chain, from
+  one codebase and one request format.
 - **Reconstruction as the deliverable** — diagrams, notes and action plans are rebuilt as
   editable artifacts rather than described in prose.
 - **8 transformation modes**:
@@ -111,7 +129,7 @@ upload → validate → prompt → generate → repair → normalize → render
    Instructions state that the image is data, never instructions.
 3. **Inference** (`app/ai_client.py`) — one thread-safe Gemini API client is built from the
    key and reused. The image goes inline as base64 with its real MIME type; the system
-   prompt and request are fused into one user turn because Gemma rejects a system role.
+   prompt and request are fused into one user turn, because Gemma rejects a system role.
    JSON mode is never requested. Saturated or missing models move along the fallback chain,
    each with a short backoff; a request the API rejects outright fails immediately instead
    of burning quota on retries that cannot succeed.
@@ -168,10 +186,10 @@ cp .env.example .env      # Windows: copy .env.example .env
 GEMINI_API_KEY=your_actual_key_here
 
 # Pick the model that matches the quality/latency tradeoff (default shown)
-GEMMA_MODEL=gemma-3-27b-it
+GEMMA_MODEL=gemini-2.5-flash-lite
 
 # Optional: try other models in order when the primary is unavailable
-# GEMMA_MODEL_FALLBACKS=gemma-3-12b-it,gemma-3-4b-it
+# GEMMA_MODEL_FALLBACKS=gemini-2.5-flash,gemma-3-27b-it
 
 # Optional image upload limit in MB (default: 10)
 MAX_UPLOAD_MB=10
@@ -222,7 +240,7 @@ translation, corrective retries, Mermaid validation, normalization and HTTP rout
 execute for real.
 
 - `tests/test_ai_client.py` — model selection and the fallback chain, request assembly, the
-  three Gemma API constraints above, error translation, retries.
+  API capability constraints above, error translation, retries.
 - `tests/test_diagram.py` — Mermaid sanitization and validation.
 - `tests/test_validation.py` — upload integrity and response normalization, including template-echo rejection.
 - `tests/test_frontend.py` — frontend contracts: render targets exist, ids are unique, no hardcoded model, no stale local-inference copy.

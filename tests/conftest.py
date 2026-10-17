@@ -1,4 +1,4 @@
-"""Shared test doubles for the cloud Gemma inference client.
+"""Shared test doubles for the cloud Gemini API inference client.
 
 No network and no API key are used. What is faked is only the transport: a
 Gemini client whose ``generate_content`` returns a scripted reply, or raises a
