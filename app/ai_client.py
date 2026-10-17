@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # Configuration helpers
 # ---------------------------------------------------------------------------
 
-DEFAULT_GEMMA_MODEL = "google/gemma-3-4b-it"
+DEFAULT_GEMMA_MODEL = "Qwen/Qwen2-VL-2B-Instruct"
 
 # Maximum new tokens to generate per request
 MAX_NEW_TOKENS = 2048
@@ -159,12 +159,24 @@ def _get_model_and_processor():
             )
 
             for cls_name in (
+                "Qwen2VLForConditionalGeneration",
+                "Qwen2_5_VLForConditionalGeneration",
                 "Gemma3ForConditionalGeneration",
                 "AutoModelForImageTextToText",
                 "AutoModelForVision2Seq",
             ):
                 try:
-                    if cls_name == "Gemma3ForConditionalGeneration":
+                    if cls_name == "Qwen2VLForConditionalGeneration":
+                        from transformers import Qwen2VLForConditionalGeneration  # type: ignore
+                        model_obj = Qwen2VLForConditionalGeneration.from_pretrained(
+                            mid, **load_kwargs
+                        )
+                    elif cls_name == "Qwen2_5_VLForConditionalGeneration":
+                        from transformers import Qwen2_5_VLForConditionalGeneration  # type: ignore
+                        model_obj = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                            mid, **load_kwargs
+                        )
+                    elif cls_name == "Gemma3ForConditionalGeneration":
                         from transformers import Gemma3ForConditionalGeneration  # type: ignore
                         model_obj = Gemma3ForConditionalGeneration.from_pretrained(
                             mid, **load_kwargs

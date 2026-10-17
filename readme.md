@@ -4,13 +4,13 @@
 
 Scribble2Structure transforms handwritten notes, whiteboard photographs, brainstorming sketches, technical system drawings, and meeting notes into structured, editable knowledge artifacts with rendered Mermaid diagrams, verifiable action plans, and multi-format exports.
 
-Powered by multimodal **Google Gemma** models via **Hugging Face Inference**.
+Powered by **local multimodal AI inference** using **Qwen2-VL** (or Google Gemma) models via **Hugging Face Transformers** — no cloud API costs, runs fully on your machine.
 
 ---
 
 ## Features
 
-- **Multimodal Gemma AI Inference**: Uses Google Gemma vision-language models (`google/gemma-3-27b-it`, `google/gemma-3-12b-it`, or `google/gemma-3-4b-it`) hosted via Hugging Face Inference Providers, Serverless API, or dedicated Inference Endpoints.
+- **Local Multimodal AI Inference**: Runs vision-language models entirely on your machine using HuggingFace Transformers. Default model: `Qwen/Qwen2-VL-2B-Instruct` (~4 GB). Compatible with `Qwen2.5-VL-3B`, `SmolVLM`, and `google/gemma-3-4b-it`.
 - **8 Transformation Modes**:
   1. **Auto Detect** — Adaptive layout & content classifier that selects the optimal mode automatically.
   2. **Handwritten Notes to Structured Notes** — Transcribes handwriting, outlines headings, key concepts, formulas, and definitions.
@@ -34,7 +34,9 @@ Powered by multimodal **Google Gemma** models via **Hugging Face Inference**.
 ### Prerequisites
 
 - Python 3.10+
-- Hugging Face Access Token with read permissions (from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens))
+- **~4 GB free disk space** (for `Qwen/Qwen2-VL-2B-Instruct` weights, downloaded once on first run)
+- Hugging Face Access Token with read permissions (from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)) — needed only for the initial model download
+- *(Optional)* NVIDIA GPU with 4+ GB VRAM for fast inference; CPU works but is slower
 
 ### 1. Clone & Environment Setup
 
@@ -65,13 +67,15 @@ Edit `.env` and provide your Hugging Face credentials:
 
 ```ini
 # Hugging Face access token — https://huggingface.co/settings/tokens
+# Only needed for the initial model weight download (gated models)
 HF_TOKEN=hf_your_actual_token_here
 
-# Multimodal Gemma model ID on Hugging Face
-HF_MODEL_ID=google/gemma-3-27b-it
-
-# Optional dedicated endpoint URL (if using a dedicated HF Inference Endpoint)
-# HF_ENDPOINT_URL=https://your-endpoint.endpoints.huggingface.cloud/v1/chat/completions
+# Local model to load (weights cached in ~/.cache/huggingface after first run)
+# ~4 GB:  Qwen/Qwen2-VL-2B-Instruct      (recommended, fast)
+# ~6 GB:  Qwen/Qwen2.5-VL-3B-Instruct    (better quality)
+# ~2 GB:  HuggingFaceTB/SmolVLM-Instruct  (smallest)
+# ~9 GB:  google/gemma-3-4b-it            (original plan)
+HF_MODEL_ID=Qwen/Qwen2-VL-2B-Instruct
 
 # Optional image upload limit in MB (default: 10)
 MAX_UPLOAD_MB=10
@@ -84,10 +88,10 @@ MAX_UPLOAD_MB=10
 Start the local server using `uvicorn`:
 
 ```bash
-uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload
+uvicorn app.main:app --host 127.0.0.1 --port 8090 --reload
 ```
 
-Open your browser to: **[http://127.0.0.1:8080](http://127.0.0.1:8080)**
+Open your browser to: **[http://127.0.0.1:8090](http://127.0.0.1:8090)**
 
 ---
 
@@ -103,6 +107,7 @@ The application includes 6 realistic image inputs in `samples/` for immediate te
 6. **`06_database_er.png`** — Relational database schema with customer, orders, items, and products.
 
 To re-generate or modify sample assets:
+
 ```bash
 python scripts/create_samples.py
 ```
@@ -118,6 +123,7 @@ pytest
 ```
 
 The tests cover:
+
 - Hugging Face Gemma inference client routing, error translation, rate-limit retries, and corrective repair routines (`tests/test_ai_client.py`).
 - Mermaid diagram parsing, sanitization, syntax validation, and repair for flowcharts, mindmaps, and ER diagrams (`tests/test_diagram.py`).
 - Upload validation (formats, EXIF orientation, size ceilings, corruption checks) and response normalization (`tests/test_validation.py`).

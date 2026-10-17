@@ -3,7 +3,7 @@
 const { chromium } = require('playwright');
 const path = require('path');
 
-const BASE = 'http://127.0.0.1:8080';
+const BASE = 'http://127.0.0.1:8090';
 const IMG = path.resolve(__dirname, 'samples', 'whiteboard.png');
 
 (async () => {
