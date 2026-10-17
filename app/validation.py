@@ -3,14 +3,17 @@
 Two jobs, kept separate because they fail for unrelated reasons:
 
 * ``validate_upload`` runs before inference and decides whether we are willing
-  to spend a request.
-* ``normalize_extraction`` runs after inference and decides whether the model's
-  JSON is safe to render.
+  to spend a request. Handles file size, extensions, content sniffing, integrity,
+  and EXIF orientation transposition.
+* ``normalize_extraction`` runs after inference and ensures the model's
+  JSON is validated and safe to render.
 """
 
 from __future__ import annotations
 
+import io
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -30,7 +33,13 @@ _WEBP_MARK = b"WEBP"
 ALLOWED_MIME = {"image/png", "image/jpeg", "image/webp"}
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 
-MAX_BYTES = 8 * 1024 * 1024
+def _get_max_bytes() -> int:
+    try:
+        return int(os.getenv("MAX_UPLOAD_MB", "10")) * 1024 * 1024
+    except (ValueError, TypeError):
+        return 10 * 1024 * 1024
+
+MAX_BYTES = _get_max_bytes()
 MAX_PIXELS = 40_000_000  # ~40 MP; guards decompression-bomb style inputs
 
 _MIME_BY_EXT = {
@@ -70,6 +79,7 @@ def validate_upload(
 ) -> ValidatedImage:
     """Validate an upload on both declared type and real content.
 
+    Applies EXIF orientation correction and dimension checks.
     Raises ValidationError with a user-facing message on any failure.
     """
     name = (filename or "").strip()
@@ -85,10 +95,11 @@ def validate_upload(
     if not data:
         raise ValidationError("The uploaded file is empty.")
 
-    if len(data) > MAX_BYTES:
+    max_b = _get_max_bytes()
+    if len(data) > max_b:
         raise ValidationError(
             f"Image is {len(data) // (1024 * 1024)} MB; the limit is "
-            f"{MAX_BYTES // (1024 * 1024)} MB."
+            f"{max_b // (1024 * 1024)} MB."
         )
 
     actual = sniff_mime(data[:32])
@@ -114,12 +125,23 @@ def validate_upload(
 
     width = height = None
     try:
-        from PIL import Image  # optional; only used for dimension reporting
+        from PIL import Image, ImageOps
 
         with Image.open(_BytesReader(data)) as im:
             im.verify()
+
         with Image.open(_BytesReader(data)) as im:
+            # Correct EXIF orientation where applicable
+            transposed = ImageOps.exif_transpose(im)
+            if transposed is not None and transposed is not im:
+                im = transposed
+                buf = io.BytesIO()
+                fmt = "PNG" if actual == "image/png" else ("WEBP" if actual == "image/webp" else "JPEG")
+                im.save(buf, format=fmt)
+                data = buf.getvalue()
+
             width, height = im.size
+
         if width * height > MAX_PIXELS:
             raise ValidationError(
                 f"Image is {width}x{height} pixels, which exceeds the "
@@ -180,12 +202,17 @@ class Extraction:
     """A validated, renderable extraction. Every field is safe to display."""
 
     title: str
+    mode: str = "auto"
+    detected_mode: str | None = None
+    summary: str = ""
     notes: list[dict[str, Any]] = field(default_factory=list)
     takeaways: list[str] = field(default_factory=list)
     action_items: list[dict[str, Any]] = field(default_factory=list)
     uncertain_text: list[dict[str, str]] = field(default_factory=list)
     diagram: dict[str, str] | None = None
     diagram_explanation: str = ""
+    sql_schema: str | None = None
+    suggestions: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -257,8 +284,7 @@ def _as_str_list(value: Any) -> list[str]:
         if isinstance(item, str) and item.strip():
             out.append(item.strip())
         elif isinstance(item, dict):
-            # Some models return {"text": "..."} for list members.
-            for key in ("text", "content", "item", "takeaway"):
+            for key in ("text", "content", "item", "takeaway", "suggestion"):
                 if isinstance(item.get(key), str) and item[key].strip():
                     out.append(item[key].strip())
                     break
@@ -314,8 +340,18 @@ def _as_action_items(value: Any) -> list[dict[str, Any]]:
                 "task": task.strip(),
                 # Never let a model invent an owner or a date. Empty strings and
                 # the literal "null"/"none" all collapse to None.
-                "owner": owner.strip() if isinstance(owner, str) and owner.strip().lower() not in {"null", "none", "n/a", "unknown", ""} else None,
-                "deadline": deadline.strip() if isinstance(deadline, str) and deadline.strip().lower() not in {"null", "none", "n/a", "unknown", ""} else None,
+                "owner": (
+                    owner.strip()
+                    if isinstance(owner, str)
+                    and owner.strip().lower() not in {"null", "none", "n/a", "unknown", "", "unassigned"}
+                    else None
+                ),
+                "deadline": (
+                    deadline.strip()
+                    if isinstance(deadline, str)
+                    and deadline.strip().lower() not in {"null", "none", "n/a", "unknown", "", "tbd"}
+                    else None
+                ),
             }
         )
     return out
@@ -339,27 +375,49 @@ def _as_uncertain(value: Any) -> list[dict[str, str]]:
 
 
 def normalize_extraction(
-    payload: dict[str, Any] | None, *, diagram_validated: dict | None = None
+    payload: dict[str, Any] | None,
+    *,
+    requested_mode: str = "auto",
+    diagram_validated: dict | None = None,
 ) -> Extraction:
     """Coerce arbitrary model JSON into a renderable Extraction.
 
     Never raises. Missing or wrong-typed fields degrade to empty rather than
-    crashing, because the notes must survive even when the diagram does not.
+    crashing, because notes and text must survive even when diagram fails.
     """
     warnings: list[str] = []
     if payload is None:
         return Extraction(
             title="Extraction unavailable",
+            mode=requested_mode,
             warnings=["The model did not return a parseable JSON object."],
         )
 
     title = payload.get("title")
-    title = str(title).strip()[:160] if isinstance(title, str) and title.strip() else "Untitled"
+    title = str(title).strip()[:160] if isinstance(title, str) and title.strip() else "Untitled Extraction"
+
+    raw_detected = payload.get("detected_mode")
+    detected_mode = (
+        str(raw_detected).strip().lower()
+        if isinstance(raw_detected, str) and raw_detected.strip()
+        else (requested_mode if requested_mode != "auto" else None)
+    )
+
+    summary = payload.get("summary")
+    summary = str(summary).strip() if isinstance(summary, str) and summary.strip() else ""
 
     notes = _as_notes(payload.get("notes"))
     takeaways = _as_str_list(payload.get("takeaways"))
     actions = _as_action_items(payload.get("action_items"))
     uncertain = _as_uncertain(payload.get("uncertain_text"))
+    suggestions = _as_str_list(payload.get("suggestions"))
+
+    raw_sql = payload.get("sql_schema")
+    sql_schema = (
+        str(raw_sql).strip()
+        if isinstance(raw_sql, str) and raw_sql.strip()
+        else None
+    )
 
     raw_diagram = payload.get("diagram")
     diagram: dict[str, str] | None = None
@@ -371,7 +429,6 @@ def normalize_extraction(
     )
 
     if isinstance(raw_diagram, dict):
-        # A diagram only ships if it survived Mermaid validation upstream.
         validated = diagram_validated if diagram_validated is not None else None
         if validated and validated.get("mermaid"):
             diagram = {
@@ -382,8 +439,8 @@ def normalize_extraction(
                 explanation = validated.get("explanation", "")
         else:
             warnings.append(
-                "A diagram was proposed but did not pass Mermaid validation, so it "
-                "was omitted. The notes above are unaffected."
+                "A diagram was generated but did not pass Mermaid validation, so it "
+                "was omitted. The structured notes and takeaways are unaffected."
             )
     elif isinstance(raw_diagram, str) and raw_diagram.strip():
         validated = diagram_validated if diagram_validated is not None else None
@@ -394,19 +451,24 @@ def normalize_extraction(
                 "Diagram source failed validation and was omitted; notes are unaffected."
             )
 
-    if not notes and not takeaways:
+    if not notes and not takeaways and not actions:
         warnings.append(
-            "No readable text was found in this image. Try a sharper photo with "
-            "better lighting, or a tighter crop on the writing."
+            "No readable structured text was found in this image. Try a sharper photo with "
+            "better lighting or tighter cropping."
         )
 
     return Extraction(
         title=title,
+        mode=requested_mode,
+        detected_mode=detected_mode,
+        summary=summary,
         notes=notes,
         takeaways=takeaways,
         action_items=actions,
         uncertain_text=uncertain,
         diagram=diagram,
         diagram_explanation=explanation,
+        sql_schema=sql_schema,
+        suggestions=suggestions,
         warnings=warnings,
     )

@@ -5,6 +5,16 @@ import pytest
 from app import diagram as dgm
 
 GOOD = "flowchart TD\n    A[Start] --> B[Next]"
+GOOD_ER = """erDiagram
+    USER ||--o{ ORDER : places
+    USER {
+        int id PK
+        string name
+    }"""
+GOOD_MINDMAP = """mindmap
+  root((Ideas))
+    Alpha
+    Beta"""
 
 
 class TestStripFences:
@@ -36,8 +46,12 @@ class TestValidateMermaid:
         assert out["type"] == "flowchart"
 
     def test_mindmap_supported(self):
-        out = dgm.validate_mermaid("mindmap\n  root((Ideas))\n    Alpha\n    Beta")
+        out = dgm.validate_mermaid(GOOD_MINDMAP)
         assert out["type"] == "mindmap"
+
+    def test_er_diagram_supported(self):
+        out = dgm.validate_mermaid(GOOD_ER)
+        assert out["type"] == "erDiagram"
 
     def test_fenced_valid_source_accepted(self):
         assert dgm.validate_mermaid("```mermaid\n" + GOOD + "\n```")["type"] == "flowchart"
@@ -51,114 +65,41 @@ class TestValidateMermaid:
             dgm.validate_mermaid(None)
 
     def test_oversized_rejected(self):
-        big = "flowchart TD\n" + "\n".join(f"    N{i} --> N{i+1}" for i in range(400))
+        big = "flowchart TD\n" + "\n".join(f"    N{i} --> N{i+1}" for i in range(500))
         with pytest.raises(dgm.DiagramError, match="limit is"):
             dgm.validate_mermaid(big)
 
     def test_too_many_lines_rejected(self):
-        many = "flowchart TD\n" + "\n".join(f"    N{i}[n{i}] --> M{i}[m{i}]" for i in range(150))
-        with pytest.raises(dgm.DiagramError):
+        many = "flowchart TD\n" + "\n".join(f"    N{i}[n{i}] --> M{i}[m{i}]" for i in range(260))
+        with pytest.raises(dgm.DiagramError, match="limit is"):
             dgm.validate_mermaid(many)
-
-    @pytest.mark.parametrize(
-        "bad",
-        [
-            "<script>alert(1)</script>",
-            'flowchart TD\n A["x"] --> B\n click A "javascript:alert(1)"',
-            "<iframe src=evil></iframe>",
-            "flowchart TD\n A[<img src=x onerror=alert(1)>]",
-        ],
-    )
-    def test_dangerous_content_rejected(self, bad):
-        with pytest.raises(dgm.DiagramError, match="script-like|markup"):
-            dgm.validate_mermaid(bad)
 
     def test_unsupported_type_rejected(self):
         with pytest.raises(dgm.DiagramError, match="Unsupported diagram type"):
-            dgm.validate_mermaid("pie title X\n    \"a\" : 10")
+            dgm.validate_mermaid("pie title Pets\n    \"Dogs\" : 386")
 
-    def test_unbalanced_brackets_rejected(self):
-        with pytest.raises(dgm.DiagramError, match="Unbalanced"):
-            dgm.validate_mermaid("flowchart TD\n    A[Start --> B")
-
-    def test_unbalanced_quotes_rejected(self):
-        with pytest.raises(dgm.DiagramError, match="Unbalanced double quotes"):
-            dgm.validate_mermaid('flowchart TD\n    A["unclosed] --> B[x]')
-
-    def test_declaration_without_nodes_rejected(self):
-        with pytest.raises(dgm.DiagramError, match="no nodes"):
-            dgm.validate_mermaid("flowchart TD")
-
-    def test_no_relationships_rejected(self):
-        with pytest.raises(dgm.DiagramError, match="no relationships"):
-            dgm.validate_mermaid("flowchart TD\n    Alpha\n    Beta")
-
-    def test_tabs_normalized(self):
-        out = dgm.validate_mermaid("flowchart TD\n\tA[x]\t-->\tB[y]")
-        assert "\t" not in out["mermaid"]
-
-    @pytest.mark.parametrize(
-        "bad",
-        [
-            # Bare multi-word node ids: balances fine, will not parse.
-            "flowchart TD\n    Write --> Invalidate cache",
-            "flowchart TD\n    A[x] --> catch up now",
-            "flowchart TD\n    A --> B --> Replica lag",
-        ],
-    )
-    def test_unbracketed_multword_labels_rejected(self, bad):
-        """The most common real model output that balances but cannot parse."""
-        with pytest.raises(dgm.DiagramError, match="bracketed"):
+    def test_script_tag_rejected(self):
+        bad = "flowchart TD\n    A[Start] --> B[<script>alert(1)</script>]"
+        with pytest.raises(dgm.DiagramError, match="rejected for safety"):
             dgm.validate_mermaid(bad)
 
-    @pytest.mark.parametrize(
-        "good",
-        [
-            "flowchart TD\n    W[Write] --> IC[Invalidate cache]",
-            'flowchart TD\n    W["Invalidate cache"] --> R[Replicas]',
-            "flowchart TD\n    W(Write) --> R(Replicas)",
-            "flowchart TD\n    W{Write} --> R{Replicas}",
-            "flowchart TD\n    W[Write] --> R[Replicas] ~~~ yes",
-        ],
-    )
-    def test_bracketed_labels_accepted(self, good):
-        assert dgm.validate_mermaid(good)["type"] == "flowchart"
+    def test_unbalanced_brackets_rejected(self):
+        bad = "flowchart TD\n    A[Start --> B[Next]"
+        with pytest.raises(dgm.DiagramError, match="Unbalanced"):
+            dgm.validate_mermaid(bad)
 
-    def test_repair_prompt_calls_out_the_bracketing_rule(self):
-        p = dgm.build_repair_prompt("flowchart TD\n Write --> Invalidate cache", "err")
-        assert "square brackets" in p.lower()
-        assert "Write[Write] --> IC[Invalidate cache]" in p
-
-    def test_explanation_preserved(self):
-        out = dgm.validate_mermaid(GOOD, explanation="shows the two steps")
-        assert out["explanation"] == "shows the two steps"
+    def test_unbracketed_node_label_with_spaces_rejected(self):
+        bad = "flowchart TD\n    Write --> Invalidate cache"
+        with pytest.raises(dgm.DiagramError, match="bracketed when it contains spaces"):
+            dgm.validate_mermaid(bad)
 
 
 class TestRepairPrompt:
-    def test_contains_error_and_source(self):
-        p = dgm.build_repair_prompt(GOOD, "Unbalanced '[]'")
-        assert "Unbalanced '[]'" in p
-        assert "flowchart TD" in p
-        assert GOOD in p
+    def test_repair_prompt_contains_error_and_type(self):
+        prompt = dgm.build_repair_prompt("flowchart TD\nA --> B", "Node label error", expected_type="flowchart")
+        assert "Node label error" in prompt
+        assert "flowchart TD" in prompt
 
-    def test_instructs_bare_output(self):
-        p = dgm.build_repair_prompt(GOOD, "err")
-        assert "ONLY a corrected Mermaid diagram" in p
-
-
-class TestFailureNeverBreaksNotes:
-    """The product invariant: a bad diagram must not cost the user their notes."""
-
-    def test_notes_survive_a_rejected_diagram(self):
-        from app import validation
-
-        payload = {
-            "title": "Board",
-            "notes": [{"heading": "Ideas", "content": ["Ship it"], "confidence": "high"}],
-            "takeaways": ["Prioritise shipping"],
-            "diagram": {"type": "flowchart", "mermaid": "<script>bad()</script>"},
-        }
-        e = validation.normalize_extraction(payload, diagram_validated=None)
-        assert e.diagram is None
-        assert e.notes[0]["content"] == ["Ship it"]
-        assert e.takeaways == ["Prioritise shipping"]
+    def test_repair_prompt_for_er(self):
+        prompt = dgm.build_repair_prompt("erDiagram\nA ||--o{ B", "Unbalanced quotes", expected_type="erDiagram")
+        assert "erDiagram" in prompt

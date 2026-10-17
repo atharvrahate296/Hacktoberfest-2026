@@ -10,17 +10,17 @@ from __future__ import annotations
 import re
 
 # Diagram types we render. Anything else is rejected rather than trusted.
-SUPPORTED_TYPES = {"flowchart", "graph", "mindmap", "sequenceDiagram"}
+SUPPORTED_TYPES = {"flowchart", "graph", "mindmap", "sequenceDiagram", "erDiagram"}
 
 # Conservative ceiling. A hand-drawn whiteboard should never need more.
-MAX_MERMAID_CHARS = 4000
-MAX_MERMAID_LINES = 200
+MAX_MERMAID_CHARS = 5000
+MAX_MERMAID_LINES = 250
 
 # Anchored form, used to confirm the source really is a diagram.
-_TYPE_RE = re.compile(r"^\s*(flowchart|graph|mindmap|sequenceDiagram)\b", re.IGNORECASE)
+_TYPE_RE = re.compile(r"^\s*(flowchart|graph|mindmap|sequenceDiagram|erDiagram)\b", re.IGNORECASE)
 # Unanchored form, used to find where the diagram starts when prose precedes it.
 _TYPE_ANYWHERE_RE = re.compile(
-    r"(?:^|\n)\s*(flowchart|graph|mindmap|sequenceDiagram)\b", re.IGNORECASE
+    r"(?:^|\n)\s*(flowchart|graph|mindmap|sequenceDiagram|erDiagram)\b", re.IGNORECASE
 )
 _FENCE_RE = re.compile(r"```(?:mermaid)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
@@ -90,7 +90,7 @@ def _check_shape(source: str) -> None:
         )
 
 
-def _check_types(source: str) -> None:
+def _check_types(source: str) -> str:
     match = _TYPE_RE.match(source)
     if not match:
         head = source.splitlines()[0][:60] if source.splitlines() else source[:60]
@@ -99,9 +99,16 @@ def _check_types(source: str) -> None:
             f"Supported types: {', '.join(sorted(SUPPORTED_TYPES))}."
         )
     declared = match.group(1).lower()
-    # 'graph' is a legacy alias for flowchart; normalize so the renderer and the
-    # UI agree on one name.
-    return "flowchart" if declared == "graph" else declared
+    # Normalize aliases and casing
+    if declared == "graph":
+        return "flowchart"
+    if declared == "erdiagram":
+        return "erDiagram"
+    if declared == "sequencediagram":
+        return "sequenceDiagram"
+    if declared == "mindmap":
+        return "mindmap"
+    return declared
 
 
 def _check_syntax_heuristics(source: str) -> None:
@@ -123,17 +130,18 @@ def _check_syntax_heuristics(source: str) -> None:
         raise DiagramError("The diagram declared no nodes.")
 
     if "-->" not in source and "---" not in source and "-" not in source:
-        # mindmap and sequenceDiagram legitimately have no arrows.
-        if not first.lower().startswith(("mindmap", "sequencediagram")):
+        # mindmap, sequenceDiagram, and erDiagram legitimately have different syntax.
+        if not first.lower().startswith(("mindmap", "sequencediagram", "erdiagram")):
             raise DiagramError("The diagram contains no relationships or steps.")
 
-    _check_node_labels(source)
+    # Only run flowchart-specific node label validation on flowcharts
+    if first.lower().startswith(("flowchart", "graph")):
+        _check_node_labels(source)
 
 
 # A bare node id containing a space is the single most common way a model
 # produces Mermaid that balances fine and still will not parse:
 #   Write --> Invalidate cache      <- rejected by mermaid, needs Write[Write]
-# Bracketed, parenthesised, braced and quoted labels are all legal.
 _LINK_SIDE = re.compile(r"(?:-->|---|-\.->|==>)\s*(.+)$")
 _LABELLED = re.compile(r"\[[^\]]*\]|\([^)]*\)|\{[^}]*\}|\"[^\"]*\"|'[^']*'")
 
@@ -148,7 +156,7 @@ def _check_node_labels(source: str) -> None:
         if not match:
             continue
         tail = _LABELLED.sub("", match.group(1)).strip()
-        # Remove edge decorations the model may append, e.g. "--> B ~~~ yes".
+        # Remove edge decorations the model may append, e.g. "--> B ~~~ yes" or "|text|".
         tail = re.sub(r"[~|].*$", "", tail).strip()
         if not tail:
             continue
@@ -183,22 +191,26 @@ def validate_mermaid(source: str, explanation: str = "") -> dict:
     }
 
 
-def build_repair_prompt(source: str, error: str) -> str:
+def build_repair_prompt(source: str, error: str, expected_type: str = "flowchart") -> str:
     """Message sent back to the model for the single corrective retry."""
+    type_instruction = "First line must be: flowchart TD"
+    if expected_type == "mindmap":
+        type_instruction = "First line must be: mindmap"
+    elif expected_type == "erDiagram":
+        type_instruction = "First line must be: erDiagram"
+    elif expected_type == "sequenceDiagram":
+        type_instruction = "First line must be: sequenceDiagram"
+
     return (
         "Your Mermaid diagram was rejected by the validator with this error:\n"
         f"{error}\n\n"
         "Return ONLY a corrected Mermaid diagram, with no prose and no code fence.\n"
         "Requirements:\n"
-        "  - First line must be exactly: flowchart TD\n"
-        "  - EVERY node label containing a space MUST be wrapped in square "
-        "brackets. This is the most common failure:\n"
-        "      WRONG:  Write --> Invalidate cache\n"
-        "      RIGHT:  Write[Write] --> IC[Invalidate cache]\n"
-        "  - Brackets must balance and stay on one line.\n"
-        "  - No HTML, <script>, <style>, or any tag.\n"
-        "  - No parentheses containing commas or colons inside labels.\n"
-        "  - Keep it under 40 lines.\n\n"
+        f"  - {type_instruction}\n"
+        "  - EVERY flowchart node label containing a space MUST be wrapped in brackets, e.g. Node[Node Name].\n"
+        "  - Brackets, quotes, and braces must balance.\n"
+        "  - No HTML, <script>, <style>, or any markup tags.\n"
+        "  - Keep it under 50 lines.\n\n"
         f"The diagram you attempted:\n{source}\n\n"
         "Return only the corrected diagram."
     )

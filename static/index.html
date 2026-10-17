@@ -7,469 +7,942 @@
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
 <style>
   :root {
-    --bg:#0d1117; --panel:#151b23; --panel-2:#1c232c; --line:#2b323b;
-    --fg:#e6edf3; --muted:#8b949e; --accent:#4f9cf9; --accent-dim:#1f6feb;
-    --good:#3fb950; --warn:#d29922; --bad:#f85149;
+    --bg:#090d13; --panel:#131821; --panel-2:#1b222d; --line:#27303d;
+    --fg:#e6edf3; --muted:#8b949e; --accent:#38bdf8; --accent-dim:#0284c7;
+    --good:#34d399; --warn:#fbbf24; --bad:#f87171; --purple:#c084fc;
     --radius:10px; --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);
-       font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-  a{color:var(--accent)}
+       font:14.5px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
 
-  header{padding:16px 28px;border-bottom:1px solid var(--line);display:flex;
-         align-items:baseline;gap:12px;flex-wrap:wrap;position:sticky;top:0;
-         background:rgba(13,17,23,.92);backdrop-filter:blur(8px);z-index:20}
-  .logo{font-size:17px;font-weight:700;letter-spacing:-.015em}
+  header{padding:14px 28px;border-bottom:1px solid var(--line);display:flex;
+         align-items:center;gap:14px;flex-wrap:wrap;position:sticky;top:0;
+         background:rgba(9,13,19,.94);backdrop-filter:blur(10px);z-index:30}
+  .logo{font-size:18px;font-weight:750;letter-spacing:-.02em}
   .logo span{color:var(--accent)}
-  .tag{color:var(--muted);font-size:13px}
-  .model{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--muted);
-         border:1px solid var(--line);padding:3px 9px;border-radius:99px}
+  .tag{color:var(--muted);font-size:13px;border-left:1px solid var(--line);padding-left:14px}
+  .header-badges{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .chip{font-family:var(--mono);font-size:11.5px;color:var(--muted);
+        border:1px solid var(--line);padding:3px 9px;border-radius:99px;background:var(--panel)}
+  .chip.live{border-color:rgba(52,211,153,.35);color:var(--good);background:rgba(52,211,153,.08)}
+  .chip.token-warn{border-color:rgba(251,191,36,.35);color:var(--warn);background:rgba(251,191,36,.08)}
 
-  main{display:grid;grid-template-columns:400px 1fr;gap:0;min-height:calc(100vh - 57px)}
-  @media(max-width:900px){main{grid-template-columns:1fr}}
+  main{display:grid;grid-template-columns:420px 1fr;gap:0;min-height:calc(100vh - 59px)}
+  @media(max-width:1050px){main{grid-template-columns:1fr}}
 
-  aside{padding:24px;border-right:1px solid var(--line);
-        display:flex;flex-direction:column;gap:18px}
-  section.work{padding:24px 28px;overflow-y:auto;max-height:calc(100vh - 57px)}
-  @media(max-width:900px){section.work{max-height:none}}
+  aside{padding:22px;border-right:1px solid var(--line);
+        display:flex;flex-direction:column;gap:18px;background:rgba(19,24,33,.5);overflow-y:auto;max-height:calc(100vh - 59px)}
+  @media(max-width:1050px){aside{max-height:none;border-right:0;border-bottom:1px solid var(--line)}}
 
-  .lede{font-size:13.5px;color:var(--muted);margin:0}
-  .drop{border:1.5px dashed var(--line);border-radius:var(--radius);padding:34px 20px;
-        text-align:center;cursor:pointer;transition:.14s;background:var(--panel)}
-  .drop:hover,.drop.over{border-color:var(--accent);background:#10161f}
-  .drop .big{font-size:26px;margin-bottom:8px;opacity:.5}
-  .drop strong{display:block;font-size:14px;margin-bottom:4px}
-  .drop small{color:var(--muted);font-size:12px}
+  section.work{padding:24px 28px;overflow-y:auto;max-height:calc(100vh - 59px);background:var(--bg)}
+  @media(max-width:1050px){section.work{max-height:none}}
 
-  #preview{max-width:100%;border-radius:8px;border:1px solid var(--line);display:none}
-  #meta{font-size:12px;color:var(--muted);font-family:var(--mono)}
+  .form-group{display:flex;flex-direction:column;gap:6px}
+  label.label{font-size:12.5px;font-weight:600;color:var(--fg);text-transform:uppercase;letter-spacing:.03em}
+
+  select.select{width:100%;padding:10px 12px;background:var(--panel);border:1px solid var(--line);
+                color:var(--fg);border-radius:8px;font-size:13.5px;outline:none;cursor:pointer}
+  select.select:focus{border-color:var(--accent)}
+  .mode-desc{font-size:12px;color:var(--muted);padding:8px 10px;background:rgba(0,0,0,.25);border-radius:6px;border:1px solid var(--line)}
+
+  .drop{border:1.5px dashed var(--line);border-radius:var(--radius);padding:24px 16px;
+        text-align:center;cursor:pointer;transition:.15s;background:var(--panel)}
+  .drop:hover,.drop.over{border-color:var(--accent);background:#131c29}
+  .drop .big{font-size:26px;margin-bottom:6px;opacity:.6}
+  .drop strong{display:block;font-size:13.5px;margin-bottom:3px}
+  .drop small{color:var(--muted);font-size:11.5px}
+
+  .preview-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+                padding:12px;display:none;flex-direction:column;gap:10px}
+  .preview-img-box{max-height:220px;overflow:hidden;border-radius:6px;border:1px solid var(--line);
+                   display:flex;align-items:center;justify-content:center;background:#06090e;position:relative}
+  .preview-img-box img{max-width:100%;max-height:220px;object-fit:contain}
+  .preview-meta{font-size:11.5px;color:var(--muted);font-family:var(--mono);word-break:break-all}
+  .preview-actions{display:flex;gap:8px}
+  .btn-sm{padding:5px 11px;font-size:12px;border-radius:6px;background:var(--panel-2);
+          border:1px solid var(--line);color:var(--fg);cursor:pointer;transition:.14s}
+  .btn-sm:hover{border-color:var(--accent);color:var(--accent)}
+  .btn-sm.danger:hover{border-color:var(--bad);color:var(--bad)}
 
   button{font:inherit;cursor:pointer;border-radius:8px;transition:.14s}
-  .primary{width:100%;padding:11px 16px;border:0;background:var(--accent);color:#06101d;
-           font-weight:650;font-size:14.5px}
-  .primary:hover:not(:disabled){background:#6badfb}
+  .primary{width:100%;padding:11px 16px;border:0;background:var(--accent);color:#041421;
+           font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px}
+  .primary:hover:not(:disabled){background:#67e8f9}
   .primary:disabled{opacity:.45;cursor:not-allowed}
 
-  .banner{border-radius:8px;padding:10px 13px;font-size:13px;margin-bottom:14px;
-          display:flex;gap:9px;align-items:flex-start}
-  .banner.warn{background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);color:#e3b341}
-  .banner.bad{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);color:#ff8078}
-  .banner.info{background:rgba(79,156,249,.08);border:1px solid rgba(79,156,249,.25);color:#8fc0ff}
-  code{font-family:var(--mono);font-size:.92em;background:rgba(255,255,255,.06);
-       padding:1px 5px;border-radius:4px}
+  .samples-title{font-size:12px;font-weight:650;color:var(--muted);text-transform:uppercase;
+                 letter-spacing:.04em;margin-top:6px}
+  .samples-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .sample-btn{padding:8px 10px;text-align:left;background:var(--panel);border:1px solid var(--line);
+              border-radius:8px;color:var(--fg);cursor:pointer;transition:.14s;display:flex;flex-direction:column;gap:3px}
+  .sample-btn:hover{border-color:var(--accent);background:#131c29}
+  .sample-btn strong{font-size:12px;color:var(--fg)}
+  .sample-btn small{font-size:10.5px;color:var(--muted);line-height:1.3}
 
-  .title{font-size:21px;font-weight:660;margin:0 0 3px;letter-spacing:-.015em}
-  .sub{color:var(--muted);font-size:13px;margin:0 0 20px}
+  .banner{border-radius:8px;padding:12px 15px;font-size:13px;margin-bottom:16px;
+          display:flex;flex-direction:column;gap:6px}
+  .banner.warn{background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);color:#fbbf24}
+  .banner.bad{background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);color:#fca5a5}
+  .banner.info{background:rgba(56,189,248,.08);border:1px solid rgba(56,189,248,.25);color:#7dd3fc}
+  .banner button{align-self:flex-start;margin-top:6px}
 
-  .tabs{display:flex;gap:3px;border-bottom:1px solid var(--line);margin-bottom:18px;
-        overflow-x:auto}
+  .work-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:14px}
+  .title-input{font-size:22px;font-weight:750;letter-spacing:-.015em;background:transparent;
+               border:1px solid transparent;border-radius:6px;color:var(--fg);padding:2px 6px;
+               width:100%;max-width:680px;font-family:inherit}
+  .title-input:hover{border-color:var(--line)}
+  .title-input:focus{outline:none;border-color:var(--accent);background:var(--panel)}
+
+  .sub{color:var(--muted);font-size:12.5px;margin:3px 0 0 6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .sub-tag{padding:2px 8px;border-radius:99px;font-size:11px;font-family:var(--mono);border:1px solid var(--line);background:var(--panel-2)}
+  .sub-tag.detected{border-color:rgba(192,132,252,.4);color:var(--purple);background:rgba(192,132,252,.08)}
+
+  .summary-box{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+               padding:14px 16px;margin-bottom:18px;font-size:13.5px;line-height:1.6}
+  .summary-box label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;display:block;margin-bottom:4px}
+  .summary-textarea{width:100%;background:transparent;border:0;color:var(--fg);font:inherit;resize:none;outline:none}
+  .summary-textarea:focus{background:rgba(0,0,0,.2);border-radius:4px;padding:4px}
+
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:18px;overflow-x:auto}
   .tab{padding:9px 15px;border:0;background:none;color:var(--muted);font-size:13.5px;
-       border-bottom:2px solid transparent;white-space:nowrap;font-weight:500}
+       border-bottom:2px solid transparent;white-space:nowrap;font-weight:550;display:flex;align-items:center;gap:6px}
   .tab:hover{color:var(--fg)}
   .tab.on{color:var(--fg);border-bottom-color:var(--accent)}
-  .tab .pill{font-size:11px;background:rgba(255,255,255,.08);padding:1px 6px;
-             border-radius:99px;margin-left:6px}
+  .tab .pill{font-size:11px;background:rgba(255,255,255,.08);padding:1px 6px;border-radius:99px}
   .tab:disabled{opacity:.35;cursor:not-allowed}
 
   .note{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
-        padding:15px 17px;margin-bottom:11px}
-  .note h3{margin:0 0 9px;font-size:14.5px;display:flex;align-items:center;gap:9px}
+        padding:15px 17px;margin-bottom:12px}
+  .note-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
+  .note h3{margin:0;font-size:14.5px;display:flex;align-items:center;gap:9px}
   .conf{font-size:10.5px;padding:2px 8px;border-radius:99px;font-weight:650;
         text-transform:uppercase;letter-spacing:.04em}
-  .conf.high{background:rgba(63,185,80,.15);color:var(--good)}
-  .conf.medium{background:rgba(210,153,34,.15);color:var(--warn)}
-  .conf.low{background:rgba(248,81,73,.15);color:var(--bad)}
-  .note ul{margin:0;padding-left:19px}
+  .conf.high{background:rgba(52,211,153,.15);color:var(--good)}
+  .conf.medium{background:rgba(251,191,36,.15);color:var(--warn)}
+  .conf.low{background:rgba(248,113,113,.15);color:var(--bad)}
+  .note ul{margin:0;padding-left:20px}
   .note li{margin-bottom:6px}
   .note li:last-child{margin-bottom:0}
 
-  .take{display:flex;gap:11px;padding:11px 14px;background:var(--panel);
-        border:1px solid var(--line);border-radius:8px;margin-bottom:8px}
-  .take .n{color:var(--accent);font-weight:700;font-family:var(--mono);font-size:12.5px;
-           min-width:18px;padding-top:1px}
+  .take{display:flex;gap:12px;padding:12px 14px;background:var(--panel);
+        border:1px solid var(--line);border-radius:8px;margin-bottom:8px;align-items:baseline}
+  .take .n{color:var(--accent);font-weight:700;font-family:var(--mono);font-size:12.5px;min-width:20px}
 
   .task{background:var(--panel);border:1px solid var(--line);border-radius:8px;
-        padding:11px 14px;margin-bottom:8px}
-  .task .meta{display:flex;gap:7px;margin-top:7px}
-  .chip{font-size:11px;background:rgba(255,255,255,.06);border:1px solid var(--line);
-        padding:2px 8px;border-radius:99px;color:var(--muted);font-family:var(--mono)}
-
-  textarea{width:100%;background:#0a0e13;border:1px solid var(--line);border-radius:8px;
-           color:var(--fg);padding:13px;font:13.5px/1.65 var(--mono);resize:vertical;
-           min-height:280px}
-  textarea:focus{outline:none;border-color:var(--accent)}
-  .hint{font-size:12px;color:var(--muted);margin:-8px 0 14px}
-
-  .empty{color:var(--muted);text-align:center;padding:90px 24px}
-  .empty .big{font-size:42px;opacity:.3;margin-bottom:14px}
-  .empty h3{color:var(--fg);font-size:16px;margin:0 0 7px}
-
-  .exports{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px;padding-top:18px;
-           border-top:1px solid var(--line)}
-  .btn{padding:7px 13px;background:var(--panel-2);border:1px solid var(--line);
-       color:var(--fg);font-size:13px}
-  .btn:hover{border-color:#4a525c;background:#232b35}
+        padding:12px 14px;margin-bottom:8px;display:flex;align-items:flex-start;gap:12px}
+  .task input[type="checkbox"]{margin-top:4px;cursor:pointer;accent-color:var(--accent)}
+  .task-content{flex:1}
+  .task-text.done{text-decoration:line-through;color:var(--muted)}
+  .task .meta{display:flex;gap:7px;margin-top:6px;flex-wrap:wrap}
 
   .mermaid-box{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
-               padding:20px;text-align:center;overflow:auto}
+               padding:20px;text-align:center;overflow:auto;min-height:220px;display:flex;flex-direction:column;align-items:center;justify-content:center}
   .mermaid-box svg{max-width:100%;height:auto}
-  pre.src{background:#0a0e13;border:1px solid var(--line);border-radius:8px;padding:14px;
-         overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:var(--muted);
-         margin:0;text-align:left}
-  .spinner{display:inline-block;width:15px;height:15px;border:2px solid var(--line);
-           border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;
-           vertical-align:-2px;margin-right:9px}
+  .diagram-toolbar{display:flex;gap:8px;margin-top:14px;align-items:center;flex-wrap:wrap}
+
+  textarea.code-editor{width:100%;background:#06090e;border:1px solid var(--line);border-radius:8px;
+                       color:#cbd5e1;padding:13px;font:13px/1.6 var(--mono);resize:vertical;min-height:240px}
+  textarea.code-editor:focus{outline:none;border-color:var(--accent)}
+
+  pre.src{background:#06090e;border:1px solid var(--line);border-radius:8px;padding:14px;
+          overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#94a3b8;margin:0;text-align:left}
+
+  .empty{color:var(--muted);text-align:center;padding:90px 24px}
+  .empty .big{font-size:42px;opacity:.35;margin-bottom:14px}
+  .empty h3{color:var(--fg);font-size:16px;margin:0 0 7px}
+
+  .btn{padding:8px 14px;background:var(--panel-2);border:1px solid var(--line);
+       color:var(--fg);font-size:13px;border-radius:7px;display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+  .btn:hover{border-color:#4a525c;background:#242c38}
+  .btn.active{border-color:var(--accent);color:var(--accent)}
+
+  .top-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .exports-bar{display:flex;gap:8px;flex-wrap:wrap;margin-top:24px;padding-top:18px;border-top:1px solid var(--line)}
+
+  .comparison-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);cursor:pointer;padding:5px 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+  .comparison-toggle:hover{color:var(--fg);border-color:var(--accent)}
+
+  .side-by-side{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px}
+  @media(max-width:1200px){.side-by-side{grid-template-columns:1fr}}
+  .side-panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;display:flex;flex-direction:column;gap:10px}
+  .side-panel h4{margin:0;font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .side-panel img{max-width:100%;max-height:480px;object-fit:contain;border-radius:6px;border:1px solid var(--line)}
+
+  .spinner{display:inline-block;width:16px;height:16px;border:2px solid var(--line);
+           border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
-  .loading{text-align:center;padding:80px 20px;color:var(--muted)}
-  .tele{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:6px}
+  .loading{text-align:center;padding:90px 20px;color:var(--muted)}
+  .loading strong{display:block;font-size:15px;color:var(--fg);margin-top:14px}
+  .tele{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:8px}
+
+  .modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.85);z-index:99;
+         display:none;align-items:center;justify-content:center;padding:24px}
+  .modal img{max-width:92vw;max-height:90vh;object-fit:contain;border-radius:8px;border:1px solid var(--line)}
+  .modal-close{position:absolute;top:20px;right:24px;font-size:24px;color:#fff;background:none;border:0;cursor:pointer}
 </style>
 </head>
 <body>
+
 <header>
   <div class="logo">Scribble<span>2</span>Structure</div>
-  <div class="tag">From messy thinking to structured knowledge.</div>
-  <div class="model" id="modelTag">…</div>
+  <div class="tag">From messy visual thinking to structured knowledge.</div>
+  <div class="header-badges">
+    <div class="chip" id="modelTag">HF: google/gemma-3-27b-it</div>
+    <div class="chip" id="endpointTag">router.huggingface.co</div>
+    <div class="chip live" id="tokenTag">● Token Loaded</div>
+  </div>
 </header>
 
 <main>
   <aside>
-    <p class="lede">Upload a photo of handwritten notes, a whiteboard, or a rough
-      diagram. Gemma&nbsp;4 reads the image and returns structured notes, takeaways,
-      supported action items, and a diagram.</p>
-
-    <div class="drop" id="drop">
-      <div class="big">⇪</div>
-      <strong>Drop an image here</strong>
-      <small>or click to browse</small>
-      <div style="margin-top:9px;font-size:11.5px">PNG · JPG · JPEG · WEBP — max 8 MB</div>
+    <div class="form-group">
+      <label class="label" for="modeSelect">Transformation Mode</label>
+      <select class="select" id="modeSelect">
+        <option value="auto" selected>✨ Auto Detect (Adaptive)</option>
+        <option value="notes">📝 Handwritten Notes to Structured Notes</option>
+        <option value="flowchart">🔀 Diagram to Flowchart</option>
+        <option value="mindmap">🧠 Brainstorming to Mind Map</option>
+        <option value="architecture">🏛️ Technical Diagram to Architecture</option>
+        <option value="actions">📋 Meeting Notes to Action Plan</option>
+        <option value="concept">🔬 Scientific Concept Map</option>
+        <option value="er">🗄️ Database ER Diagram</option>
+      </select>
+      <div class="mode-desc" id="modeDesc">
+        Automatically analyzes visual layout and content to select the best transformation mode.
+      </div>
     </div>
-    <input type="file" id="file" accept="image/png,image/jpeg,image/webp" hidden />
-    <img id="preview" alt="Preview of the image you selected" />
-    <div id="meta"></div>
 
-    <button class="primary" id="run" disabled>Analyze Image</button>
+    <div class="form-group">
+      <label class="label">Source Image</label>
+      <div class="drop" id="drop">
+        <div class="big">⇪</div>
+        <strong>Drop an image here</strong>
+        <small>or click to browse</small>
+        <div style="margin-top:6px;font-size:11px;color:var(--muted)">PNG · JPG · JPEG · WEBP · Max <span id="maxMb">10</span> MB</div>
+      </div>
+      <input type="file" id="file" accept="image/png,image/jpeg,image/webp" hidden />
 
-    <p style="font-size:11.5px;color:var(--muted);margin:0">
-      AI interpretation can contain mistakes. Review the output before relying on it.
-      Your image is sent to the model provider for processing and is not stored by this app.
+      <div class="preview-card" id="previewCard">
+        <div class="preview-img-box">
+          <img id="previewImg" alt="Image preview" />
+        </div>
+        <div class="preview-meta" id="previewMeta"></div>
+        <div class="preview-actions">
+          <button class="btn-sm" id="replaceBtn">Replace</button>
+          <button class="btn-sm" id="zoomBtn">Enlarge</button>
+          <button class="btn-sm danger" id="removeBtn">Remove</button>
+        </div>
+      </div>
+    </div>
+
+    <button class="primary" id="runBtn" disabled>
+      <span>Analyze with Gemma</span>
+    </button>
+
+    <div>
+      <div class="samples-title">Sample Inputs Gallery</div>
+      <div class="samples-grid" id="samplesGrid"></div>
+    </div>
+
+    <p style="font-size:11px;color:var(--muted);margin:0;line-height:1.5">
+      Inference runs on Hugging Face using Google Gemma. Tokens stay server-side.
+      Review AI outputs before relying on them.
     </p>
   </aside>
 
-  <section class="work">
+  <section class="work" id="workSection">
     <div id="out">
       <div class="empty">
         <div class="big">◳</div>
         <h3>No analysis yet</h3>
-        <div>Upload an image of your notes or whiteboard, then press Analyze.</div>
+        <div>Upload an image or pick a sample from the gallery, then press <strong>Analyze with Gemma</strong>.</div>
       </div>
     </div>
   </section>
 </main>
+
+<div class="modal" id="imgModal">
+  <button class="modal-close" id="modalClose">&times;</button>
+  <img id="modalImg" alt="Full size preview" />
+</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => (s == null ? "" : String(s)).replace(/[&<>"']/g,
   c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
-mermaid.initialize({ startOnLoad:false, securityLevel:"strict", theme:"dark",
-                     themeVariables:{ primaryColor:"#1c232c", primaryTextColor:"#e6edf3",
-                                     lineColor:"#4f9cf9", fontSize:"14px" } });
-
-let selected = null, result = null, activeTab = "notes";
-
-fetch("/api/config").then(r=>r.json()).then(c=>{
-  $("modelTag").textContent = c.model;
-  if(!c.api_key_present) banner("warn",
-    `No API key loaded. Copy <code>.env.example</code> to <code>.env</code>, set
-     <code>OPENROUTER_API_KEY</code>, and restart the app.`);
+mermaid.initialize({
+  startOnLoad: false,
+  securityLevel: "strict",
+  theme: "dark",
+  themeVariables: {
+    primaryColor: "#1b222d",
+    primaryTextColor: "#e6edf3",
+    lineColor: "#38bdf8",
+    fontSize: "13.5px"
+  }
 });
 
-function banner(kind, html){
+let selectedFile = null;
+let originalResult = null;
+let currentResult = null;
+let activeTab = "notes";
+let hasUnsavedEdits = false;
+let showSideBySide = false;
+let configData = {};
+
+// Fetch config on load
+fetch("/api/config").then(r => r.json()).then(c => {
+  configData = c;
+  if(c.model) $("modelTag").textContent = "HF: " + c.model;
+  if(c.endpoint) $("endpointTag").textContent = c.endpoint.replace(/^https?:\/\//, "").split("/")[0];
+  if(c.max_mb) $("maxMb").textContent = c.max_mb;
+  if(!c.api_key_present) {
+    $("tokenTag").textContent = "⚠ Token Missing";
+    $("tokenTag").className = "chip token-warn";
+    banner("warn", `<strong>Hugging Face token not detected.</strong> Set <code>HF_TOKEN</code> in your <code>.env</code> file (from <a href="https://huggingface.co/settings/tokens" target="_blank">huggingface.co/settings/tokens</a>) and restart.`);
+  }
+}).catch(() => {});
+
+// Fetch samples gallery
+fetch("/api/samples").then(r => r.json()).then(samples => {
+  const grid = $("samplesGrid");
+  grid.innerHTML = samples.map(s => `
+    <button class="sample-btn" data-url="${s.url}" data-name="${s.filename}" data-mode="${s.mode}">
+      <strong>${esc(s.title)}</strong>
+      <small>${esc(s.description)}</small>
+    </button>
+  `).join("");
+
+  document.querySelectorAll(".sample-btn").forEach(btn => {
+    btn.onclick = async () => {
+      const url = btn.dataset.url;
+      const name = btn.dataset.name;
+      const mode = btn.dataset.mode;
+      try {
+        const resp = await fetch(url);
+        const blob = await resp.blob();
+        const file = new File([blob], name, { type: blob.type });
+        pickFile(file);
+        if (mode && $("modeSelect")) {
+          $("modeSelect").value = mode;
+          updateModeDesc();
+        }
+      } catch (err) {
+        alert("Failed to load sample: " + err.message);
+      }
+    };
+  });
+}).catch(() => {});
+
+// Mode description helper
+const MODE_DESCS = {
+  auto: "Automatically analyzes visual layout and content to select the best transformation mode.",
+  notes: "Extract readable text, headings, subheadings, bullet points, key concepts, formulas, and definitions.",
+  flowchart: "Identify nodes, labels, arrows, decision points, and operations into a Mermaid flowchart.",
+  mindmap: "Map central themes and radiating branches into a hierarchical Mermaid mindmap.",
+  architecture: "Analyze system components, interfaces, and data flows into an architecture document.",
+  actions: "Extract decisions, confirmed tasks, assignees, and deadlines without inventing missing facts.",
+  concept: "Map scientific theories, formulas, notation, and relationships with precision.",
+  er: "Extract database entities, attributes, primary/foreign keys, and cardinalities into an ER diagram."
+};
+
+$("modeSelect").onchange = updateModeDesc;
+function updateModeDesc() {
+  const m = $("modeSelect").value;
+  $("modeDesc").textContent = MODE_DESCS[m] || "";
+}
+
+function banner(kind, html) {
   const d = document.createElement("div");
   d.className = "banner " + kind;
   d.innerHTML = html;
   $("out").insertBefore(d, $("out").firstChild);
 }
 
+// Drag & drop
 const drop = $("drop");
-drop.onclick = ()=>$("file").click();
-$("file").onchange = e=>pick(e.target.files[0]);
-["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{
-  e.preventDefault(); drop.classList.add("over");}));
-["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{
-  e.preventDefault(); drop.classList.remove("over");}));
-drop.addEventListener("drop", e=>pick(e.dataTransfer.files[0]));
+drop.onclick = () => $("file").click();
+$("file").onchange = e => pickFile(e.target.files[0]);
+["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.add("over");
+}));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.remove("over");
+}));
+drop.addEventListener("drop", e => {
+  e.preventDefault();
+  pickFile(e.dataTransfer.files[0]);
+});
 
-function pick(f){
-  if(!f) return;
-  const ok = /image\/(png|jpeg|webp)/.test(f.type) || /\.(png|jpe?g|webp)$/i.test(f.name);
-  if(!ok){ alert("Please choose a PNG, JPG, JPEG, or WEBP image."); return; }
-  selected = f;
-  $("preview").src = URL.createObjectURL(f);
-  $("preview").style.display = "block";
-  $("meta").textContent = f.name + " · " + (f.size/1024).toFixed(0) + " KB";
-  $("run").disabled = false;
+function pickFile(f) {
+  if (!f) return;
+  const ok = /image\/(png|jpeg|webp)/i.test(f.type) || /\.(png|jpe?g|webp)$/i.test(f.name);
+  if (!ok) {
+    alert("Please select a valid image (PNG, JPG, JPEG, or WEBP).");
+    return;
+  }
+  selectedFile = f;
+  const url = URL.createObjectURL(f);
+  $("previewImg").src = url;
+  $("modalImg").src = url;
+  $("previewCard").style.display = "flex";
+  drop.style.display = "none";
+  $("previewMeta").textContent = `${f.name} · ${(f.size / 1024).toFixed(0)} KB`;
+  $("runBtn").disabled = false;
 }
 
-$("run").onclick = async ()=>{
-  if(!selected || $("run").disabled) return;
-  $("run").disabled = true;               // blocks duplicate submissions
-  $("run").textContent = "Analyzing…";
-  $("out").innerHTML =
-    `<div class="loading"><div><span class="spinner"></span>Reading your ideas…</div>
-     <div class="tele">Gemma 4 is examining the image</div></div>`;
+$("replaceBtn").onclick = () => $("file").click();
+$("removeBtn").onclick = () => {
+  if (hasUnsavedEdits && !confirm("Discard current edits and clear this image?")) return;
+  selectedFile = null;
+  $("file").value = "";
+  $("previewCard").style.display = "none";
+  drop.style.display = "block";
+  $("runBtn").disabled = true;
+};
+$("zoomBtn").onclick = () => { $("imgModal").style.display = "flex"; };
+$("modalClose").onclick = () => { $("imgModal").style.display = "none"; };
+$("imgModal").onclick = (e) => { if (e.target === $("imgModal")) $("imgModal").style.display = "none"; };
+
+// Execute analysis
+$("runBtn").onclick = async () => {
+  if (!selectedFile || $("runBtn").disabled) return;
+  if (hasUnsavedEdits && !confirm("Starting a new analysis will replace your current edits. Continue?")) return;
+
+  $("runBtn").disabled = true;
+  $("runBtn").innerHTML = `<span class="spinner"></span> <span>Analyzing…</span>`;
+  $("out").innerHTML = `
+    <div class="loading">
+      <span class="spinner" style="width:24px;height:24px"></span>
+      <strong>Transcribing and Structuring Knowledge…</strong>
+      <div class="tele">Hugging Face Gemma is analyzing visual content (${$("modeSelect").value} mode)</div>
+    </div>`;
 
   const fd = new FormData();
-  fd.append("image", selected);
-  try{
-    const r = await fetch("/api/analyze",{method:"POST",body:fd});
-    const d = await r.json().catch(()=>({detail:r.statusText}));
-    if(!r.ok) throw new Error(d.detail || r.statusText);
-    result = d;
-    render(d);
-  }catch(err){
-    $("out").innerHTML =
-      `<div class="banner bad"><strong>Analysis failed.</strong><div>${esc(err.message)}</div></div>`;
-  }finally{
-    $("run").disabled = false;
-    $("run").textContent = "Analyze Image";
+  fd.append("image", selectedFile);
+  fd.append("mode", $("modeSelect").value);
+
+  try {
+    const res = await fetch("/api/analyze", { method: "POST", body: fd });
+    const data = await res.json().catch(() => ({ detail: res.statusText }));
+    if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`);
+
+    originalResult = JSON.parse(JSON.stringify(data));
+    currentResult = JSON.parse(JSON.stringify(data));
+    hasUnsavedEdits = false;
+    renderResult();
+  } catch (err) {
+    $("out").innerHTML = `
+      <div class="banner bad">
+        <strong>Analysis Failed</strong>
+        <div>${esc(err.message)}</div>
+        <button class="btn-sm" id="retryBtn" style="margin-top:8px">Retry Analysis</button>
+      </div>`;
+    if ($("retryBtn")) $("retryBtn").onclick = () => $("runBtn").click();
+  } finally {
+    $("runBtn").disabled = false;
+    $("runBtn").innerHTML = `<span>Analyze with Gemma</span>`;
   }
 };
 
-function tabs(d){
-  const counts = {
-    notes: d.notes.length,
-    takeaways: d.takeaways.length,
-    actions: d.action_items.length,
-    flow: d.diagram ? 1 : 0,
-    uncertain: d.uncertain_text.length,
-  };
-  const items = [
-    ["notes","Structured Notes",counts.notes],
-    ["takeaways","Key Takeaways",counts.takeaways],
-    ["actions","Action Items",counts.actions],
-    ["flow","Flowchart",counts.flow],
-    ["uncertain","Uncertain Text",counts.uncertain],
+function renderResult() {
+  const d = currentResult;
+  if (!d) return;
+
+  // Determine active tab if not set
+  const tabCandidates = [
+    { id: "notes", count: d.notes.length },
+    { id: "takeaways", count: d.takeaways.length },
+    { id: "actions", count: d.action_items.length },
+    { id: "diagram", count: d.diagram ? 1 : 0 },
+    { id: "sql", count: d.sql_schema ? 1 : 0 },
+    { id: "suggestions", count: d.suggestions ? d.suggestions.length : 0 },
+    { id: "uncertain", count: d.uncertain_text.length },
   ];
-  return `<div class="tabs">` + items.map(([id,label,n])=>{
-    const dis = n===0 ? " disabled" : "";
-    const on = id===activeTab ? " on" : "";
-    return `<button class="tab${on}" data-tab="${id}"${dis}>${label}
-      ${n?`<span class="pill">${n}</span>`:""}</button>`;
+  if (!tabCandidates.find(c => c.id === activeTab && c.count > 0)) {
+    const firstActive = tabCandidates.find(c => c.count > 0);
+    activeTab = firstActive ? firstActive.id : "notes";
+  }
+
+  paintResult();
+}
+
+function paintResult() {
+  const d = currentResult;
+  const t = d.telemetry || {};
+  const warns = (d.warnings || []).map(w => `<div class="banner warn">${esc(w)}</div>`).join("");
+
+  const modeBadge = d.detected_mode
+    ? `<span class="sub-tag detected">Mode: ${esc(d.detected_mode)}</span>`
+    : (d.mode && d.mode !== "auto" ? `<span class="sub-tag">Mode: ${esc(d.mode)}</span>` : "");
+
+  const sideBySideHtml = showSideBySide && selectedFile ? `
+    <div class="side-by-side">
+      <div class="side-panel">
+        <h4>Source Image</h4>
+        <img src="${$("previewImg").src}" alt="Source comparison" />
+      </div>
+      <div class="side-panel">
+        <h4>Rendered Diagram</h4>
+        <div id="sideMermaid">${d.diagram ? `<div class="mermaid" id="sideMmd">${esc(d.diagram.mermaid)}</div>` : `<span style="color:var(--muted)">No diagram in this output</span>`}</div>
+      </div>
+    </div>` : "";
+
+  $("out").innerHTML = `
+    ${warns}
+    <div class="work-header">
+      <div style="flex:1;min-width:280px">
+        <input type="text" class="title-input" id="titleInput" value="${esc(d.title)}" title="Click to edit title" />
+        <div class="sub">
+          <span>${esc(d.source.filename)}</span>
+          ${d.source.width ? `<span>${d.source.width}×${d.source.height}</span>` : ""}
+          <span>${t.elapsed_ms || 0} ms</span>
+          ${t.attempts > 1 ? `<span>${t.attempts} attempts</span>` : ""}
+          ${modeBadge}
+        </div>
+      </div>
+      <div class="top-actions">
+        <button class="comparison-toggle ${showSideBySide ? "active" : ""}" id="compareBtn">
+          ${showSideBySide ? "Hide Comparison" : "Compare Image"}
+        </button>
+        <button class="btn" id="newBtn">New</button>
+        <button class="btn" id="resetBtn" ${hasUnsavedEdits ? "" : "disabled"}>Reset</button>
+      </div>
+    </div>
+
+    ${d.summary ? `
+      <div class="summary-box">
+        <label>Executive Summary (Editable)</label>
+        <textarea class="summary-textarea" id="summaryInput" rows="2">${esc(d.summary)}</textarea>
+      </div>` : ""}
+
+    ${sideBySideHtml}
+
+    ${renderTabsNav(d)}
+    <div id="tabContent">${renderTabContent(d)}</div>
+
+    <div class="exports-bar" id="exportsBar"></div>
+  `;
+
+  // Attach event handlers
+  $("titleInput").oninput = (e) => {
+    currentResult.title = e.target.value;
+    hasUnsavedEdits = true;
+    $("resetBtn").disabled = false;
+  };
+
+  if ($("summaryInput")) {
+    $("summaryInput").oninput = (e) => {
+      currentResult.summary = e.target.value;
+      hasUnsavedEdits = true;
+      $("resetBtn").disabled = false;
+    };
+  }
+
+  $("compareBtn").onclick = () => {
+    showSideBySide = !showSideBySide;
+    paintResult();
+  };
+
+  $("newBtn").onclick = () => {
+    if (hasUnsavedEdits && !confirm("Start new analysis and clear current edits?")) return;
+    currentResult = null;
+    originalResult = null;
+    hasUnsavedEdits = false;
+    $("out").innerHTML = `
+      <div class="empty">
+        <div class="big">◳</div>
+        <h3>Ready for new analysis</h3>
+        <div>Select an image and click <strong>Analyze with Gemma</strong>.</div>
+      </div>`;
+  };
+
+  $("resetBtn").onclick = () => {
+    if (!confirm("Discard all edits and restore original model output?")) return;
+    currentResult = JSON.parse(JSON.stringify(originalResult));
+    hasUnsavedEdits = false;
+    paintResult();
+  };
+
+  document.querySelectorAll(".tab").forEach(b => {
+    b.onclick = () => {
+      activeTab = b.dataset.tab;
+      paintResult();
+    };
+  });
+
+  mountExports();
+
+  if (activeTab === "diagram" && d.diagram) {
+    drawMermaid("mmdMain", d.diagram.mermaid, $("mermaidBox"));
+  }
+  if (showSideBySide && d.diagram && $("sideMmd")) {
+    drawMermaid("sideMmdSvg", d.diagram.mermaid, $("sideMermaid"));
+  }
+}
+
+function renderTabsNav(d) {
+  const tabs = [
+    { id: "notes", label: "Structured Notes", count: d.notes.length },
+    { id: "takeaways", label: "Key Takeaways", count: d.takeaways.length },
+    { id: "actions", label: "Action Plan", count: d.action_items.length },
+    { id: "diagram", label: "Diagram", count: d.diagram ? 1 : 0 },
+    { id: "sql", label: "SQL Schema", count: d.sql_schema ? 1 : 0 },
+    { id: "suggestions", label: "Suggestions", count: (d.suggestions || []).length },
+    { id: "uncertain", label: "Uncertain Text", count: d.uncertain_text.length },
+  ];
+
+  return `<div class="tabs">` + tabs.map(t => {
+    const dis = t.count === 0 ? " disabled" : "";
+    const on = t.id === activeTab ? " on" : "";
+    return `<button class="tab${on}" data-tab="${t.id}"${dis}>
+      ${t.label} ${t.count ? `<span class="pill">${t.count}</span>` : ""}
+    </button>`;
   }).join("") + `</div>`;
 }
 
-function panelNotes(d){
-  if(!d.notes.length) return `<div class="empty"><div class="big">◌</div>
-    <h3>No structured notes</h3><div>The model did not return readable notes for this image.</div></div>`;
-  return d.notes.map(n=>`
+function renderTabContent(d) {
+  if (activeTab === "notes") return renderNotesPanel(d);
+  if (activeTab === "takeaways") return renderTakeawaysPanel(d);
+  if (activeTab === "actions") return renderActionsPanel(d);
+  if (activeTab === "diagram") return renderDiagramPanel(d);
+  if (activeTab === "sql") return renderSqlPanel(d);
+  if (activeTab === "suggestions") return renderSuggestionsPanel(d);
+  if (activeTab === "uncertain") return renderUncertainPanel(d);
+  return "";
+}
+
+function renderNotesPanel(d) {
+  if (!d.notes.length) return `<div class="empty"><h3>No structured notes</h3><div>The model did not find readable prose or notes.</div></div>`;
+
+  return d.notes.map((n, ni) => `
     <div class="note">
-      <h3>${esc(n.heading)}<span class="conf ${esc(n.confidence)}">${esc(n.confidence)}</span></h3>
-      <ul>${n.content.map(c=>`<li>${esc(c)}</li>`).join("")}</ul>
-    </div>`).join("") + editHint();
-}
-
-function panelTakeaways(d){
-  if(!d.takeaways.length) return `<div class="empty"><div class="big">◌</div>
-    <h3>No takeaways</h3><div>This image does not contain conclusions worth summarizing.
-      That is a correct result, not a failure.</div></div>`;
-  return d.takeaways.map((t,i)=>`
-    <div class="take"><span class="n">${i+1}</span><div>${esc(t)}</div></div>`).join("");
-}
-
-function panelActions(d){
-  if(!d.action_items.length) return `<div class="empty"><div class="big">◌</div>
-    <h3>No action items</h3><div>Nothing in the image was explicitly written as a task.
-      Action items are only shown when the image supports them.</div></div>`;
-  return d.action_items.map(a=>`
-    <div class="task">
-      <div>${esc(a.task)}</div>
-      <div class="meta">
-        <span class="chip">owner: ${a.owner ? esc(a.owner) : "not stated"}</span>
-        <span class="chip">deadline: ${a.deadline ? esc(a.deadline) : "not stated"}</span>
+      <div class="note-header">
+        <h3>${esc(n.heading)}</h3>
+        <span class="conf ${esc(n.confidence)}">${esc(n.confidence)}</span>
       </div>
-    </div>`).join("");
+      <ul>
+        ${n.content.map(c => `<li>${esc(c)}</li>`).join("")}
+      </ul>
+    </div>
+  `).join("");
 }
 
-function panelFlow(d){
-  if(!d.diagram) return `<div class="empty"><div class="big">◌</div>
-    <h3>No diagram</h3>
-    <div>${d.diagram_explanation
-      ? esc(d.diagram_explanation)
-      : "The image does not show a process, dependency, or hierarchy worth diagramming."}</div></div>`;
+function renderTakeawaysPanel(d) {
+  if (!d.takeaways.length) return `<div class="empty"><h3>No key takeaways</h3><div>No summary conclusions extracted.</div></div>`;
+  return d.takeaways.map((t, i) => `
+    <div class="take">
+      <span class="n">${i+1}</span>
+      <div>${esc(t)}</div>
+    </div>
+  `).join("");
+}
+
+function renderActionsPanel(d) {
+  if (!d.action_items.length) return `<div class="empty"><h3>No action items found</h3><div>No explicit tasks or deadlines were in the source image.</div></div>`;
   return `
-    <div class="mermaid-box"><div class="mermaid" id="mmd">${esc(d.diagram.mermaid)}</div></div>
-    ${d.diagram_explanation ? `<p class="hint" style="margin-top:12px">
-      ${esc(d.diagram_explanation)}</p>` : ""}
-    <details style="margin-top:14px">
-      <summary style="cursor:pointer;font-size:13px;color:var(--muted)">Mermaid source</summary>
-      <pre class="src" style="margin-top:9px">${esc(d.diagram.mermaid)}</pre>
-    </details>`;
+    <div id="actionList">
+      ${d.action_items.map((a, i) => `
+        <div class="task">
+          <input type="checkbox" id="taskChk_${i}" ${a.done ? "checked" : ""} onchange="toggleTask(${i})" />
+          <div class="task-content">
+            <div class="task-text ${a.done ? "done" : ""}" id="taskText_${i}">${esc(a.task)}</div>
+            <div class="meta">
+              <span class="chip">Owner: ${a.owner ? esc(a.owner) : "Unassigned"}</span>
+              <span class="chip">Deadline: ${a.deadline ? esc(a.deadline) : "Not stated"}</span>
+            </div>
+          </div>
+        </div>
+      `).join("")}
+    </div>`;
 }
 
-function panelUncertain(d){
-  if(!d.uncertain_text.length) return `<div class="empty"><div class="big">◌</div>
-    <h3>Nothing flagged as uncertain</h3>
-    <div>Every fragment the model read was treated as legible.</div></div>`;
-  return d.uncertain_text.map(u=>`
-    <div class="note"><h3>${esc(u.text_or_location)}</h3>
-    <div style="color:var(--muted);font-size:13.5px">${esc(u.reason)}</div></div>`).join("");
+window.toggleTask = function(i) {
+  currentResult.action_items[i].done = !currentResult.action_items[i].done;
+  hasUnsavedEdits = true;
+  $("resetBtn").disabled = false;
+  const el = $("taskText_" + i);
+  if (el) el.classList.toggle("done", currentResult.action_items[i].done);
+};
+
+function renderDiagramPanel(d) {
+  if (!d.diagram) {
+    return `<div class="empty">
+      <h3>No diagram extracted</h3>
+      <div>${d.diagram_explanation ? esc(d.diagram_explanation) : "This image does not contain a process, architecture, or ER diagram."}</div>
+    </div>`;
+  }
+
+  return `
+    <div class="mermaid-box" id="mermaidBox">
+      <div class="mermaid" id="mmdMain">${esc(d.diagram.mermaid)}</div>
+    </div>
+    ${d.diagram_explanation ? `<p style="font-size:12.5px;color:var(--muted);margin:10px 0">${esc(d.diagram_explanation)}</p>` : ""}
+
+    <div class="diagram-toolbar">
+      <button class="btn" id="toggleEditorBtn">Edit Diagram Source</button>
+      <button class="btn" id="dlMmdBtn">Download .mmd</button>
+      <button class="btn" id="copyMmdBtn">Copy Source</button>
+    </div>
+
+    <div id="diagramEditorBox" style="display:none;margin-top:14px">
+      <label class="label" style="display:block;margin-bottom:6px">Editable Mermaid Source</label>
+      <textarea class="code-editor" id="mermaidSource">${esc(d.diagram.mermaid)}</textarea>
+      <div style="margin-top:8px;display:flex;gap:8px">
+        <button class="btn active" id="updateDiagramBtn">Update &amp; Re-render</button>
+      </div>
+    </div>
+  `;
 }
 
-function editHint(){
-  return `<p class="hint">Want to adjust the wording? Use
-    <strong>Edit &amp; Export</strong> — your edits are included in every download.</p>`;
+function renderSqlPanel(d) {
+  if (!d.sql_schema) return `<div class="empty"><h3>No SQL schema</h3></div>`;
+  return `
+    <div class="note">
+      <div class="note-header">
+        <h3>Generated SQL Table Definitions (DDL)</h3>
+        <button class="btn-sm" id="copySqlBtn">Copy SQL</button>
+      </div>
+      <pre class="src">${esc(d.sql_schema)}</pre>
+    </div>
+  `;
 }
 
-function render(d){
-  activeTab = d.notes.length ? "notes" : (d.takeaways.length ? "takeaways" : "flow");
-  paint(d);
+function renderSuggestionsPanel(d) {
+  const list = d.suggestions || [];
+  if (!list.length) return `<div class="empty"><h3>No suggestions</h3></div>`;
+  return `
+    <div class="banner info" style="margin-bottom:14px">
+      <strong>AI-Generated Suggestions &amp; Next Steps</strong>
+      <div>These suggestions are distinct from facts directly transcribed from the source image.</div>
+    </div>
+    ${list.map((s, i) => `
+      <div class="take">
+        <span class="n" style="color:var(--purple)">${i+1}</span>
+        <div>${esc(s)}</div>
+      </div>
+    `).join("")}
+  `;
 }
 
-function paint(d){
-  const bodies = { notes:panelNotes, takeaways:panelTakeaways, actions:panelActions,
-                   flow:panelFlow, uncertain:panelUncertain };
-  const warns = (d.warnings||[]).map(w=>`<div class="banner warn">${esc(w)}</div>`).join("");
-  const t = d.telemetry || {};
-  $("out").innerHTML =
-    `${warns}
-     <h1 class="title">${esc(d.title)}</h1>
-     <p class="sub">${esc(d.source.filename)}${d.source.width?` · ${d.source.width}×${d.source.height}`:""}
-       · ${t.elapsed_ms} ms${t.attempts>1?` · ${t.attempts} model calls`:""}</p>
-     ${tabs(d)}
-     <div id="panel">${bodies[activeTab](d)}</div>
-     <div id="exports"></div>`;
-
-  document.querySelectorAll(".tab").forEach(b=>
-    b.addEventListener("click",()=>{ activeTab=b.dataset.tab; paint(d); }));
-  mountExports(d);
-  if(activeTab==="flow" && d.diagram) drawMermaid(d);
+function renderUncertainPanel(d) {
+  if (!d.uncertain_text.length) return `<div class="empty"><h3>No uncertain fragments</h3><div>All extracted fragments appeared sufficiently legible.</div></div>`;
+  return d.uncertain_text.map(u => `
+    <div class="note" style="border-left:3px solid var(--warn)">
+      <h3 style="color:var(--warn)">${esc(u.text_or_location)}</h3>
+      <div style="color:var(--muted);font-size:13px">${esc(u.reason)}</div>
+    </div>
+  `).join("");
 }
 
-async function drawMermaid(d){
-  const el = $("mmd");
-  if(!el) return;
-  try{
-    // Parse before render so a failure falls back instead of blanking the page.
-    await mermaid.parse(d.diagram.mermaid);
-    const { svg } = await mermaid.render("mmdSvg", d.diagram.mermaid);
+async function drawMermaid(id, code, container) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  try {
+    await mermaid.parse(code);
+    const { svg } = await mermaid.render(id + "Svg", code);
     el.innerHTML = svg;
-  }catch(err){
-    el.closest(".mermaid-box").innerHTML =
-      `<div class="banner warn" style="text-align:left">This diagram could not be rendered,
-        so its source is shown instead. Your notes and takeaways are unaffected.</div>
-       <pre class="src">${esc(d.diagram.mermaid)}</pre>`;
-  }
-}
-
-/* ---------- export ---------- */
-const curNotes = ()=>{
-  const ta = document.querySelector("#notesEdit");
-  return ta ? ta.value.split("\n").filter(l=>l.trim()) : (result.notes.flatMap(n=>n.content));
-};
-const curTake = ()=>{
-  const ta = document.querySelector("#takeEdit");
-  return ta ? ta.value.split("\n").filter(l=>l.trim()) : result.takeaways;
-};
-
-function markdown(d){
-  const out = [`# ${d.title}`, "",
-    `*Source: ${d.source.filename} · extracted with ${d.telemetry.model}*`, "", "## Notes", ""];
-  const notes = curNotes();
-  (notes.length ? notes : d.notes.flatMap(n=>n.content))
-    .forEach(l=>out.push(`- ${l}`));
-  out.push("", "## Key Takeaways", "");
-  const takes = curTake();
-  (takes.length ? takes : d.takeaways).forEach((t,i)=>out.push(`${i+1}. ${t}`));
-  if(d.action_items.length){
-    out.push("", "## Action Items", "");
-    d.action_items.forEach(a=>out.push(
-      `- [ ] ${a.task}${a.owner?` _(owner: ${a.owner})_`:""}${a.deadline?` _(by: ${a.deadline})_`:""}`));
-  }
-  if(d.diagram) out.push("", "## Diagram", "",
-    "```mermaid", d.diagram.mermaid.trim(), "```");
-  if(d.uncertain_text.length){
-    out.push("", "## Uncertain Text", "");
-    d.uncertain_text.forEach(u=>out.push(`- ${u.text_or_location} — ${u.reason}`));
-  }
-  out.push("", "---", "",
-    "Generated by Scribble2Structure using Gemma 4. AI output may contain errors; review before use.");
-  return out.join("\n");
-}
-
-function download(name, text, type="text/plain"){
-  const b = new Blob([text],{type});
-  const u = URL.createObjectURL(b);
-  const a = document.createElement("a");
-  a.href=u; a.download=name; a.click();
-  URL.revokeObjectURL(u);
-}
-
-async function copy(text){
-  try{
-    if(navigator.clipboard && window.isSecureContext){
-      await navigator.clipboard.writeText(text);
-      return true;
+  } catch (err) {
+    if (container) {
+      container.innerHTML = `
+        <div class="banner warn" style="text-align:left;width:100%">
+          <strong>Diagram Rendering Error</strong>
+          <div>${esc(err.message || "Syntax error")}. Showing raw source instead:</div>
+        </div>
+        <pre class="src" style="width:100%">${esc(code)}</pre>`;
     }
-  }catch(e){ /* fall through to the manual path */ }
-  return false;
+  }
 }
 
-function mountExports(d){
-  const slug = (d.title||"extraction").toLowerCase()
-    .replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,48) || "extraction";
-  const box = $("exports");
+function mountExports() {
+  const d = currentResult;
+  if (!d) return;
 
-  const editBtn = `<button class="btn" id="editBtn">Edit &amp; Export</button>`;
-  const actions = [
-    editBtn,
-    `<button class="btn" id="mdBtn">Download Markdown</button>`,
-    `<button class="btn" id="jsonBtn">Download JSON</button>`,
-    d.diagram ? `<button class="btn" id="mmdBtn">Download .mmd</button>` : "",
-    `<button class="btn" id="copyBtn">Copy notes</button>`,
-    `<button class="btn" id="copyMmBtn">Copy Mermaid</button>`,
-  ].join("");
+  const slug = (d.title || "extraction").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "scribble-structure";
 
-  box.innerHTML = `<div class="exports">${actions}</div>
-    <div id="editor"></div>`;
+  $("exportsBar").innerHTML = `
+    <button class="btn" id="mdDl">Download Markdown (.md)</button>
+    <button class="btn" id="txtDl">Download Text (.txt)</button>
+    <button class="btn" id="jsonDl">Download JSON (.json)</button>
+    ${d.diagram ? `<button class="btn" id="mmdDl">Download Mermaid (.mmd)</button>` : ""}
+    <button class="btn" id="copyNotesBtn">Copy Notes</button>
+    <button class="btn" id="copyMdBtn">Copy Markdown</button>
+  `;
 
-  $("editBtn").onclick = ()=>{
-    const ed = $("editor");
-    if(ed.innerHTML){ ed.innerHTML=""; return; }
-    ed.innerHTML = `
-      <p class="hint" style="margin-top:16px">Edits here are used by every copy and
-        download button. One item per line.</p>
-      <strong style="font-size:13px">Notes</strong>
-      <textarea id="notesEdit">${esc(curNotes().join("\n"))}</textarea>
-      <strong style="font-size:13px;display:block;margin-top:14px">Takeaways</strong>
-      <textarea id="takeEdit">${esc(curTake().join("\n"))}</textarea>`;
-    ed.scrollIntoView({behavior:"smooth",block:"nearest"});
+  $("mdDl").onclick = () => downloadFile(`${slug}.md`, generateMarkdown(d), "text/markdown");
+  $("txtDl").onclick = () => downloadFile(`${slug}.txt`, generatePlainText(d), "text/plain");
+  $("jsonDl").onclick = () => downloadFile(`${slug}.json`, JSON.stringify(d, null, 2), "application/json");
+
+  if ($("mmdDl") && d.diagram) {
+    $("mmdDl").onclick = () => downloadFile(`${slug}.mmd`, d.diagram.mermaid, "text/plain");
+  }
+
+  $("copyNotesBtn").onclick = async () => {
+    const text = (d.notes || []).map(n => `${n.heading}\n${n.content.map(c => `• ${c}`).join("\n")}`).join("\n\n");
+    await copyToClipboard(text, "Notes copied to clipboard.");
   };
 
-  $("mdBtn").onclick   = ()=>download(slug+".md", markdown(d), "text/markdown");
-  $("jsonBtn").onclick = ()=>download(slug+".json",
-    JSON.stringify({title:d.title, notes:d.notes, takeaways:d.takeaways,
-                    action_items:d.action_items, uncertain_text:d.uncertain_text,
-                    diagram:d.diagram, source:d.source, model:d.telemetry.model}, null, 2),
-    "application/json");
-  if($("mmdBtn"))
-    $("mmdBtn").onclick = ()=>download(slug+".mmd", d.diagram.mermaid, "text/plain");
-
-  const fb = (msg, ok) => alert(msg);
-  $("copyBtn").onclick = async ()=>{
-    const ok = await copy(curNotes().join("\n"));
-    fb(ok ? "Notes copied to clipboard."
-          : "Clipboard unavailable in this context.\n\nSelect and copy manually:\n\n" +
-            curNotes().join("\n"));
+  $("copyMdBtn").onclick = async () => {
+    await copyToClipboard(generateMarkdown(d), "Markdown copied to clipboard.");
   };
-  if($("copyMmBtn"))
-    $("copyMmBtn").onclick = async ()=>{
-      const ok = await copy(d.diagram.mermaid);
-      fb(ok ? "Mermaid source copied to clipboard."
-            : "Clipboard unavailable in this context.\n\nSelect and copy manually:\n\n" +
-              d.diagram.mermaid);
+
+  // Diagram panel actions
+  if ($("toggleEditorBtn")) {
+    $("toggleEditorBtn").onclick = () => {
+      const box = $("diagramEditorBox");
+      box.style.display = box.style.display === "none" ? "block" : "none";
     };
+  }
+
+  if ($("updateDiagramBtn")) {
+    $("updateDiagramBtn").onclick = async () => {
+      const newSource = $("mermaidSource").value;
+      currentResult.diagram.mermaid = newSource;
+      hasUnsavedEdits = true;
+      $("resetBtn").disabled = false;
+      await drawMermaid("mmdMain", newSource, $("mermaidBox"));
+    };
+  }
+
+  if ($("dlMmdBtn") && d.diagram) {
+    $("dlMmdBtn").onclick = () => downloadFile(`${slug}.mmd`, d.diagram.mermaid, "text/plain");
+  }
+
+  if ($("copyMmdBtn") && d.diagram) {
+    $("copyMmdBtn").onclick = async () => {
+      await copyToClipboard(d.diagram.mermaid, "Mermaid source copied to clipboard.");
+    };
+  }
+
+  if ($("copySqlBtn") && d.sql_schema) {
+    $("copySqlBtn").onclick = async () => {
+      await copyToClipboard(d.sql_schema, "SQL schema copied to clipboard.");
+    };
+  }
+}
+
+function generateMarkdown(d) {
+  const lines = [
+    `# ${d.title}`, "",
+    `*Extracted via Scribble2Structure using ${d.telemetry?.model || "Google Gemma"}*`,
+    d.detected_mode ? `*Mode: ${d.detected_mode}*` : "", "",
+  ];
+
+  if (d.summary) {
+    lines.push("## Summary", "", d.summary, "");
+  }
+
+  if (d.notes && d.notes.length) {
+    lines.push("## Structured Notes", "");
+    d.notes.forEach(n => {
+      lines.push(`### ${n.heading} (${n.confidence})`);
+      n.content.forEach(c => lines.push(`- ${c}`));
+      lines.push("");
+    });
+  }
+
+  if (d.takeaways && d.takeaways.length) {
+    lines.push("## Key Takeaways", "");
+    d.takeaways.forEach((t, i) => lines.push(`${i+1}. ${t}`));
+    lines.push("");
+  }
+
+  if (d.action_items && d.action_items.length) {
+    lines.push("## Action Plan", "");
+    d.action_items.forEach(a => {
+      const chk = a.done ? "[x]" : "[ ]";
+      const owner = a.owner ? ` *(owner: ${a.owner})*` : "";
+      const due = a.deadline ? ` *(due: ${a.deadline})*` : "";
+      lines.push(`- ${chk} ${a.task}${owner}${due}`);
+    });
+    lines.push("");
+  }
+
+  if (d.diagram && d.diagram.mermaid) {
+    lines.push("## Diagram", "", "```mermaid", d.diagram.mermaid.trim(), "```", "");
+    if (d.diagram_explanation) lines.push(d.diagram_explanation, "");
+  }
+
+  if (d.sql_schema) {
+    lines.push("## SQL Schema", "", "```sql", d.sql_schema.trim(), "```", "");
+  }
+
+  if (d.suggestions && d.suggestions.length) {
+    lines.push("## AI Suggestions", "");
+    d.suggestions.forEach(s => lines.push(`- ${s}`));
+    lines.push("");
+  }
+
+  if (d.uncertain_text && d.uncertain_text.length) {
+    lines.push("## Uncertain Text", "");
+    d.uncertain_text.forEach(u => lines.push(`- **${u.text_or_location}**: ${u.reason}`));
+    lines.push("");
+  }
+
+  lines.push("---", "*Generated by Scribble2Structure. Verify AI output before use.*");
+  return lines.join("\n");
+}
+
+function generatePlainText(d) {
+  const lines = [d.title.toUpperCase(), "=".repeat(d.title.length), ""];
+  if (d.summary) lines.push("SUMMARY:", d.summary, "");
+
+  if (d.notes && d.notes.length) {
+    lines.push("NOTES:");
+    d.notes.forEach(n => {
+      lines.push(`[${n.heading}]`);
+      n.content.forEach(c => lines.push(`  * ${c}`));
+    });
+    lines.push("");
+  }
+
+  if (d.takeaways && d.takeaways.length) {
+    lines.push("KEY TAKEAWAYS:");
+    d.takeaways.forEach((t, i) => lines.push(`  ${i+1}. ${t}`));
+    lines.push("");
+  }
+
+  if (d.action_items && d.action_items.length) {
+    lines.push("ACTION ITEMS:");
+    d.action_items.forEach(a => {
+      const st = a.done ? "[DONE]" : "[TODO]";
+      const meta = [a.owner ? `owner: ${a.owner}` : "", a.deadline ? `due: ${a.deadline}` : ""].filter(Boolean).join(", ");
+      lines.push(`  ${st} ${a.task} ${meta ? `(${meta})` : ""}`);
+    });
+    lines.push("");
+  }
+
+  if (d.diagram_explanation) {
+    lines.push("DIAGRAM DESCRIPTION:", d.diagram_explanation, "");
+  }
+
+  return lines.join("\n");
+}
+
+function downloadFile(name, content, type = "text/plain") {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function copyToClipboard(text, successMsg) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      alert(successMsg);
+      return;
+    }
+  } catch (e) {}
+  prompt("Copy to clipboard manually (Ctrl+C, Enter):", text);
 }
 </script>
 </body>
