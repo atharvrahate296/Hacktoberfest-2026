@@ -103,3 +103,120 @@ class TestRepairPrompt:
     def test_repair_prompt_for_er(self):
         prompt = dgm.build_repair_prompt("erDiagram\nA ||--o{ B", "Unbalanced quotes", expected_type="erDiagram")
         assert "erDiagram" in prompt
+
+
+class TestErRepair:
+    """The failure in the field: an ER diagram whose attributes have no data
+    type passes every generic check and then dies in the browser with
+    "Expecting 'ATTRIBUTE_WORD', got 'BLOCK_STOP'"."""
+
+    BROKEN = """erDiagram
+    EMP {
+        name
+        id
+    }
+    COMPANY {
+        name
+        id
+        emp_id
+    }
+    EMP ||--o{ COMPANY : "works for"
+"""
+
+    def test_a_bare_attribute_is_given_a_type(self):
+        out = dgm.validate_mermaid(self.BROKEN)
+        assert "string name" in out["mermaid"]
+        assert "string emp_id" in out["mermaid"]
+
+    def test_the_repair_is_reported_as_a_change(self):
+        out = dgm.validate_mermaid(self.BROKEN)
+        assert out["changes"], "a repair that is not reported is a silent overwrite"
+        assert any("data type" in change for change in out["changes"])
+
+    def test_the_change_says_which_entity_and_attribute(self):
+        out = dgm.validate_mermaid(self.BROKEN)
+        joined = " ".join(out["changes"])
+        assert "EMP" in joined and "emp_id" in joined
+
+    def test_a_valid_er_diagram_is_left_alone(self):
+        out = dgm.validate_mermaid(GOOD_ER)
+        assert out["changes"] == []
+        assert "int id PK" in out["mermaid"]
+
+    def test_an_entity_name_with_a_space_keeps_its_label(self):
+        source = 'erDiagram\n    "Employee Record" {\n        string id PK\n    }\n'
+        out = dgm.validate_mermaid(source)
+        assert 'Employee_Record["Employee Record"]' in out["mermaid"]
+        assert any("Renamed the entity" in change for change in out["changes"])
+
+    def test_an_attribute_name_with_a_space_is_joined(self):
+        source = "erDiagram\n    A {\n        string first name\n    }\n"
+        out = dgm.validate_mermaid(source)
+        assert "string first_name" in out["mermaid"]
+
+    def test_a_key_without_a_type_is_repaired(self):
+        source = "erDiagram\n    A {\n        id PK\n    }\n"
+        out = dgm.validate_mermaid(source)
+        assert "string id PK" in out["mermaid"]
+
+    def test_an_invalid_cardinality_is_rejected_with_a_usable_message(self):
+        source = 'erDiagram\n    A ||--?{ B : "weird"\n'
+        with pytest.raises(dgm.DiagramError, match="not a valid relationship"):
+            dgm.validate_mermaid(source)
+
+    def test_an_unclosed_attribute_block_is_rejected(self):
+        source = "erDiagram\n    A {\n        string id\n"
+        with pytest.raises(dgm.DiagramError, match="never"):
+            dgm.validate_mermaid(source)
+
+    def test_a_relationship_without_a_label_gets_one(self):
+        source = "erDiagram\n    A ||--o{ B\n"
+        out = dgm.validate_mermaid(source)
+        assert 'relates to' in out["mermaid"]
+        assert out["changes"]
+
+    def test_relationship_labels_with_spaces_are_quoted(self):
+        source = 'erDiagram\n    A ||--o{ B : works for\n'
+        out = dgm.validate_mermaid(source)
+        assert '"works for"' in out["mermaid"]
+
+    def test_er_warnings_flag_an_entity_without_attributes(self):
+        source = 'erDiagram\n    A ||--o{ B : "has"\n'
+        out = dgm.validate_mermaid(source)
+        assert any("no attributes" in w for w in out["warnings"])
+
+    def test_the_er_repair_prompt_teaches_the_er_rules(self):
+        prompt = dgm.build_repair_prompt("erDiagram", "boom", expected_type="erDiagram")
+        assert "type name" in prompt
+        assert "||--o{" in prompt
+        # A flowchart rule is meaningless for an ER diagram.
+        assert "brackets" not in prompt
+
+    def test_parse_er_reports_entities_attributes_and_relationships(self):
+        parsed = dgm.parse_er(GOOD_ER)
+        assert [e["id"] for e in parsed["entities"]] == ["USER", "ORDER"]
+        assert parsed["entities"][0]["attributes"][0] == {
+            "type": "int",
+            "name": "id",
+            "keys": ["PK"],
+            "comment": "",
+        }
+        assert parsed["relationships"][0]["from"] == "USER"
+        assert parsed["relationships"][0]["cardinality"] == "||--o{"
+
+
+class TestCoverage:
+    def test_er_labels_are_the_entities_and_attributes(self):
+        labels = dgm.diagram_labels(GOOD_ER)
+        assert "USER" in labels and "id" in labels
+
+    def test_flowchart_labels_are_the_node_labels(self):
+        labels = dgm.diagram_labels("flowchart TD\n    A[Start here] --> B[Next step]")
+        assert labels == ["Start here", "Next step"]
+
+    def test_missing_labels_are_reported(self):
+        missing = dgm.missing_labels("flowchart TD\n    A[Start]", ["Start", "Finish"])
+        assert missing == ["Finish"]
+
+    def test_nothing_is_missing_when_everything_is_there(self):
+        assert dgm.missing_labels(GOOD_ER, ["USER", "ORDER"]) == []

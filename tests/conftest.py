@@ -91,6 +91,18 @@ def no_real_sleeps(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolated_key_store(monkeypatch, tmp_path):
+    """Point the credential store at a temporary directory.
+
+    The Settings screen writes a real key to disk. Without this, a key saved
+    on the developer's machine would leak into the suite and change what
+    ``api_key()`` returns.
+    """
+    monkeypatch.setenv("SCRIBBLE2STRUCTURE_HOME", str(tmp_path / "store"))
+    return tmp_path / "store"
+
+
+@pytest.fixture(autouse=True)
 def api_key(monkeypatch):
     """A key is present unless a test removes it."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")

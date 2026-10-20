@@ -266,6 +266,12 @@ class Extraction:
     sql_schema: str | None = None
     suggestions: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Everything the model found in the image, one entry per drawn element.
+    coverage: list[dict[str, str]] = field(default_factory=list)
+    # What the app or the model changed in the original drawing, and why.
+    deviations: list[dict[str, str]] = field(default_factory=list)
+    # The teaching layer: a plain-language walkthrough of the idea.
+    guide: dict[str, Any] = field(default_factory=dict)
 
 
 def extract_json_object(text: str) -> dict[str, Any] | None:
@@ -440,6 +446,148 @@ def _as_uncertain(value: Any) -> list[dict[str, str]]:
     return out
 
 
+def _as_coverage(value: Any) -> list[dict[str, str]]:
+    """The inventory of elements the model found in the image.
+
+    Each entry is one drawn thing: a box, a table, a node, a heading. The
+    app checks the diagram against this list, so a label that was echoed back
+    from the template has to be dropped here rather than counted as coverage.
+    """
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in value:
+        if isinstance(item, str):
+            label = item.strip()
+            if not label or is_schema_echo(label):
+                continue
+            key = label.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"label": label, "kind": "", "detail": "", "confidence": ""})
+            continue
+        if not isinstance(item, dict):
+            continue
+        label = item.get("label") or item.get("name") or item.get("text")
+        if not isinstance(label, str) or not label.strip() or is_schema_echo(label):
+            continue
+        label = label.strip()
+        key = label.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        kind = item.get("kind") or item.get("type") or ""
+        kind = "" if not isinstance(kind, str) or is_schema_echo(kind) else kind.strip()
+        detail = item.get("detail") or item.get("description") or ""
+        detail = "" if not isinstance(detail, str) or is_schema_echo(detail) else detail.strip()
+        confidence = item.get("confidence") or ""
+        confidence = (
+            ""
+            if not isinstance(confidence, str) or is_schema_echo(confidence)
+            else confidence.strip().lower()
+        )
+        out.append(
+            {
+                "label": label,
+                "kind": kind,
+                "detail": detail,
+                "confidence": confidence,
+            }
+        )
+    return out
+
+
+def _as_deviations(value: Any) -> list[dict[str, str]]:
+    """Changes made to the original drawing, with the reason for each.
+
+    This is the record of "what did the app do to my idea, and why". A
+    deviation without a reason is not a deviation, it is an overwrite, so an
+    entry without one is dropped.
+    """
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+            if not text or is_schema_echo(text):
+                continue
+            out.append({"change": text, "why": "", "basis": ""})
+            continue
+        if not isinstance(item, dict):
+            continue
+        change = item.get("change") or item.get("what") or item.get("changed")
+        if not isinstance(change, str) or not change.strip() or is_schema_echo(change):
+            continue
+        why = item.get("why") or item.get("reason") or item.get("because")
+        why = "" if not isinstance(why, str) or is_schema_echo(why) else why.strip()
+        basis = item.get("basis") or item.get("kind") or ""
+        basis = "" if not isinstance(basis, str) or is_schema_echo(basis) else basis.strip()
+        out.append({"change": change.strip(), "why": why, "basis": basis})
+    return out
+
+
+def _as_guide(value: Any) -> dict[str, Any]:
+    """The teaching layer: a plain-language walkthrough of the idea."""
+    if not isinstance(value, dict):
+        return {}
+
+    def _text(raw: Any) -> str:
+        if not isinstance(raw, str) or not raw.strip() or is_schema_echo(raw):
+            return ""
+        return raw.strip()
+
+    overview = _text(value.get("overview"))
+
+    steps: list[dict[str, str]] = []
+    raw_steps = value.get("steps")
+    if isinstance(raw_steps, list):
+        for item in raw_steps:
+            if isinstance(item, str):
+                title, detail = "", item.strip()
+                if detail and not is_schema_echo(detail):
+                    steps.append({"title": "", "detail": detail})
+                continue
+            if not isinstance(item, dict):
+                continue
+            title = _text(item.get("title") or item.get("name"))
+            detail = _text(item.get("detail") or item.get("text") or item.get("content"))
+            if not title and not detail:
+                continue
+            steps.append({"title": title, "detail": detail})
+
+    concepts: list[dict[str, str]] = []
+    raw_concepts = value.get("concepts")
+    if isinstance(raw_concepts, list):
+        for item in raw_concepts:
+            if isinstance(item, str):
+                meaning = item.strip()
+                if meaning and not is_schema_echo(meaning):
+                    concepts.append({"term": "", "meaning": meaning})
+                continue
+            if not isinstance(item, dict):
+                continue
+            term = _text(item.get("term") or item.get("name"))
+            meaning = _text(item.get("meaning") or item.get("definition") or item.get("detail"))
+            if not term and not meaning:
+                continue
+            concepts.append({"term": term, "meaning": meaning})
+
+    next_steps = _as_str_list(value.get("next_steps"))
+
+    if not (overview or steps or concepts or next_steps):
+        return {}
+    return {
+        "overview": overview,
+        "steps": steps,
+        "concepts": concepts,
+        "next_steps": next_steps,
+    }
+
+
 def _string_values(value: Any, depth: int = 0) -> list[str]:
     """Every string anywhere in the payload, used to spot a schema echo."""
     if depth > 6:
@@ -464,6 +612,7 @@ def normalize_extraction(
     *,
     requested_mode: str = "auto",
     diagram_validated: dict | None = None,
+    extra_deviations: list[dict[str, str]] | None = None,
 ) -> Extraction:
     """Coerce arbitrary model JSON into a renderable Extraction.
 
@@ -507,6 +656,9 @@ def normalize_extraction(
     actions = _as_action_items(payload.get("action_items"))
     uncertain = _as_uncertain(payload.get("uncertain_text"))
     suggestions = _as_str_list(payload.get("suggestions"))
+    coverage = _as_coverage(payload.get("coverage"))
+    deviations = _as_deviations(payload.get("deviations"))
+    guide = _as_guide(payload.get("guide"))
 
     raw_sql = payload.get("sql_schema")
     sql_schema = (
@@ -579,6 +731,21 @@ def normalize_extraction(
             "(GEMMA_MODEL=gemma-3-27b-it) or a clearer image."
         )
 
+    # Changes the app made to the drawing itself (a repaired ER attribute, a
+    # renamed entity) are deviations too, and belong in the same record as
+    # the model's own: what changed, and why.
+    for extra in extra_deviations or []:
+        change = (extra.get("change") or "").strip()
+        if not change or any(d["change"] == change for d in deviations):
+            continue
+        deviations.append(
+            {
+                "change": change,
+                "why": (extra.get("why") or "").strip(),
+                "basis": (extra.get("basis") or "normalization").strip(),
+            }
+        )
+
     return Extraction(
         title=title,
         mode=requested_mode,
@@ -593,4 +760,7 @@ def normalize_extraction(
         sql_schema=sql_schema,
         suggestions=suggestions,
         warnings=warnings,
+        coverage=coverage,
+        deviations=deviations,
+        guide=guide,
     )

@@ -62,6 +62,20 @@ Core Rules:
    copied from the image itself.
 8. NEVER copy the example values from the schema below. If a field does not apply, use an empty
    list, an empty string, or null. A placeholder repeated back verbatim is a failed answer.
+
+Faithfulness to the drawing (this matters more than being tidy):
+9. The author's own sketch is the source of truth. Keep the names, labels, boxes and
+   connections exactly as they were drawn. Do not rename a box, merge two boxes, split one
+   box, reorder the flow, or add a box that is not in the image.
+10. If the drawing is genuinely ambiguous, do not silently pick one reading. Say so in
+   "uncertain_text" and, if you still had to choose, record the choice in "deviations".
+11. Every change you make to the drawing must appear in "deviations" with what changed and
+   why. An unreported change is a failure even if the result looks better.
+12. "coverage" is your inventory of what is in the image: one entry per box, entity, table,
+   node, arrow label or distinct heading. It is what the app checks the diagram against, so
+   it must be complete and must use the names as written in the image.
+13. The diagram is the deliverable, not a summary of it. It must contain EVERY element of
+   the drawing, with its own labels, not a reduced version of it.
 """
 
 _JSON_SCHEMA = """Return ONLY a single valid JSON object with this exact shape. Fill every value with content
@@ -91,12 +105,43 @@ read from the image; leave a field empty rather than repeating this template:
       "reason": "Why it is uncertain (e.g. smudged, illegible handwriting, cut off)"
     }
   ],
+  "coverage": [
+    {
+      "label": "Name of one box, entity, table, node or label in the image",
+      "kind": "entity|node|box|label",
+      "detail": "What that element contains, in a few words",
+      "confidence": "high|medium|low"
+    }
+  ],
   "diagram": {
     "type": "flowchart|mindmap|erDiagram|sequenceDiagram",
     "mermaid": "Raw Mermaid syntax (no ``` code fences)"
   },
   "diagram_explanation": "What relationships or flow the diagram shows",
   "sql_schema": "Optional SQL CREATE TABLE statements for ER mode (or null)",
+  "deviations": [
+    {
+      "change": "What was changed, renamed, added or inferred compared with the image",
+      "why": "Why that change was necessary",
+      "basis": "source|inferred|normalization"
+    }
+  ],
+  "guide": {
+    "overview": "Two or three sentences explaining the concept in plain language",
+    "steps": [
+      {
+        "title": "A short title for one thing to notice",
+        "detail": "What to look at in the drawing and why it matters"
+      }
+    ],
+    "concepts": [
+      {
+        "term": "A term that appears in the drawing",
+        "meaning": "What that term means here"
+      }
+    ],
+    "next_steps": ["One concrete next step the reader could take"]
+  },
   "suggestions": [
     "AI suggestion or recommended next step (clearly distinguished from source content)"
   ]
@@ -115,8 +160,12 @@ _MODE_SPECIFICS = {
 - Map the sequence of operations and branch conditions.
 - Generate valid Mermaid flowchart syntax under "diagram" using "flowchart TD" or "flowchart LR".
 - Every node with spaces MUST have bracketed labels, e.g. NodeA["Step description"].
+- The flowchart must contain EVERY box and EVERY arrow in the drawing, with the arrow
+  labels the author wrote. Keep the direction of the flow exactly as drawn.
 - In "diagram_explanation", explain the process sequence and visible decision paths.
-- Flag any missing, faded, or unclear relationships in "uncertain_text" instead of inventing them.""",
+- Flag any missing, faded, or unclear relationships in "uncertain_text" instead of inventing them.
+- In "guide", walk a reader through the flow step by step and point out the decisions that
+  change the path.""",
 
     "mindmap": """Mode Focus: Brainstorming to Mind Map
 - Identify the central topic or theme and radiating branches.
@@ -129,40 +178,72 @@ _MODE_SPECIFICS = {
         Idea 2
       Category B
         Idea 3
-- In "suggestions", suggest logical priorities and dependencies, clearly marked as suggestions.""",
+- Every branch and every leaf in the drawing must appear in the mindmap.
+- In "suggestions", suggest logical priorities and dependencies, clearly marked as suggestions.
+- In "guide", explain the theme, how the branches group, and what the structure suggests.""",
 
     "architecture": """Mode Focus: Technical Diagram to Architecture Document
 - Identify system components (services, clients, databases, caches, message queues, APIs).
 - Extract component labels, interface protocols (HTTP, gRPC, WebSocket), and data flows.
 - Generate a Mermaid architecture diagram ("flowchart TD" or "flowchart LR") showing components and links.
+- Every component and every link in the drawing must appear in the diagram, labelled with the
+  author's own wording.
 - In "notes", provide a structured architectural breakdown: Component Overview, Data Flow, Storage, Security.
-- Flag missing or ambiguous connections in "uncertain_text". Do not invent unpictured technologies.""",
+- Flag missing or ambiguous connections in "uncertain_text". Do not invent unpictured technologies.
+- In "guide", explain how a request moves through the system and which component matters most.""",
 
     "actions": """Mode Focus: Meeting Notes to Action Plan
 - Extract confirmed decisions, discussed items, action tasks, owners, and deadlines.
 - Populate "action_items" strictly with explicit tasks.
 - CRITICAL: "owner" and "deadline" MUST be null unless literally written in the image.
 - Separate confirmed tasks from open questions or unresolved discussion points.
-- Place unresolved discussion points in "uncertain_text" or "suggestions".""",
+- Place unresolved discussion points in "uncertain_text" or "suggestions".
+- In "guide", summarise the decisions and what happens next, without adding any task that
+  is not written in the image.""",
 
     "concept": """Mode Focus: Scientific Concept Map
 - Identify scientific concepts, mathematical laws, biological/chemical processes, or physical models.
 - Preserve formulas, symbols, units (e.g. kg, m/s^2), and exact notation.
 - Generate a Mermaid flowchart ("flowchart TD") mapping how concepts relate, cause, or depend on each other.
+- Include every concept and every arrow in the drawing, in the order the author drew them.
 - In "notes", provide structured scientific explanations, definitions, and equations.
-- Distinguish extracted information from supplementary textbook knowledge in "suggestions".""",
+- Distinguish extracted information from supplementary textbook knowledge in "suggestions".
+- In "guide", explain the concept in plain language, define each term, and show how the
+  pieces fit together.""",
 
     "er": """Mode Focus: Database ER Diagram
 - Extract entities (tables), attributes (columns), primary keys (PK), foreign keys (FK), and cardinalities.
-- Generate a valid Mermaid erDiagram in "diagram" using standard Mermaid ER syntax:
-  erDiagram
-    ENTITY1 ||--o{ ENTITY2 : "relationship"
-    ENTITY1 {
-      string id PK
-      string name
-    }
-- If relationships or cardinalities are ambiguous, flag them in "uncertain_text" instead of guessing.
-- In "sql_schema", provide clean ANSI SQL "CREATE TABLE" statements representing the extracted schema.""",
+- List EVERY entity in "coverage", then put EVERY one of them in the diagram, with EVERY
+  attribute you can read. A missing entity or a missing column is a failed reconstruction.
+- Generate a valid Mermaid erDiagram in "diagram". The syntax is strict and Mermaid will
+  refuse to draw a malformed one. Follow it exactly:
+    erDiagram
+        EMPLOYEE {
+            string id PK
+            string name
+            string company_id FK
+        }
+        COMPANY {
+            string id PK
+            string name
+        }
+        EMPLOYEE ||--o{ COMPANY : "works for"
+  Rules that MUST hold:
+    - The first line is exactly "erDiagram".
+    - EVERY attribute inside a block is written as `type name`, for example `string name`
+      or `int id`. A bare `name` on its own is a syntax error.
+    - A key may follow the name: `string id PK`, `string company_id FK`.
+    - Entity names use letters, digits and underscores only. If the drawn name contains a
+      space, write it as NAME["Display Name"] and keep the drawn wording in the label.
+    - A relationship is written `PARENT ||--o{ CHILD : "label"` with the label in quotes.
+    - Cardinality: `||` exactly one, `|o` zero or one, `o{` zero or more, `|{` one or more.
+      The separator is `--` (identifying) or `..` (non-identifying).
+- Read the cardinality off the drawing. If it is ambiguous, use the reading the drawing
+  supports and record it in "uncertain_text" and in "deviations".
+- In "sql_schema", provide clean ANSI SQL "CREATE TABLE" statements representing the
+  extracted schema, with the same names the drawing uses.
+- In "guide", explain what each entity represents and how the entities relate, so a reader
+  who cannot read ER notation can still follow the model.""",
 
     "auto": """Mode Focus: Auto Detect
 1. First, inspect the visual format and layout:
@@ -203,10 +284,18 @@ Return ONLY the JSON structure specified in your instructions.
 
 Check your response against these criteria before replying:
 - Every string is content actually read from the image. No template text, no commentary.
-- Nodes, labels, and relationships from the drawing are reproduced in "diagram.mermaid".
+- "coverage" lists every element of the drawing, with the names exactly as written there.
+- "diagram.mermaid" contains every one of those elements, with its own labels, in the order
+  the author drew them. A diagram that drops a box is an incomplete answer.
+- The names in the diagram are the names in the image. Nothing is renamed, merged, split or
+  added on your own initiative.
+- Anything you did change is written in "deviations", saying what changed and why.
 - No owners or deadlines appear in action items unless explicitly written in the source.
 - Unclear, smudged, or ambiguous parts are flagged in "uncertain_text".
-- Any generated Mermaid syntax is syntactically valid and matches the mode.
+- Any generated Mermaid syntax is syntactically valid and matches the mode. An ER diagram
+  writes every attribute as `type name` and every relationship as
+  `PARENT ||--o{{ CHILD : "label"`.
+- "guide" explains the result to a reader who cannot read the drawing, in plain language.
 - Output is pure JSON with no markdown fences."""
 
 

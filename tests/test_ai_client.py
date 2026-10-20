@@ -520,3 +520,47 @@ class TestCorrectiveRetries:
         assert telemetry["diagram_error"]
         assert len(ext.notes) == 1
         assert any("Mermaid validation" in w for w in ext.warnings)
+
+
+class TestMissingDiagramRetry:
+    """A mode whose deliverable is a diagram, answered without one."""
+
+    NO_DIAGRAM = {
+        "title": "Employee records",
+        "detected_mode": "er",
+        "notes": [{"heading": "Entities", "content": ["EMP", "COMPANY"]}],
+        "coverage": [{"label": "EMP", "kind": "entity"}],
+    }
+
+    def test_a_missing_diagram_is_asked_for_again(self, image, client_env):
+        diagram = (
+            "erDiagram\n"
+            "    EMP {\n"
+            "        string id\n"
+            "    }\n"
+            "    COMPANY {\n"
+            "        string id\n"
+            "    }\n"
+        )
+        client_env(replies=[json.dumps(self.NO_DIAGRAM), diagram])
+
+        ext, telemetry = ai_client.analyze(image, mode="er")
+
+        assert ext.diagram is not None
+        assert "EMP" in ext.diagram["mermaid"]
+        assert telemetry["diagram_retry"] == "ok"
+
+    def test_the_retry_is_only_made_when_a_diagram_is_owed(self, image, client_env):
+        """Notes mode owes no diagram, so no request is wasted."""
+        client_env(replies=[json.dumps({"title": "T", "notes": [{"heading": "H", "content": ["C"]}]})])
+        _ext, telemetry = ai_client.analyze(image, mode="notes")
+        assert "diagram_retry" not in telemetry
+
+    def test_a_failed_retry_is_not_fatal(self, image, client_env):
+        client_env(
+            replies=[json.dumps(self.NO_DIAGRAM), "sorry, I could not do that"],
+        )
+        ext, telemetry = ai_client.analyze(image, mode="er")
+        assert ext.diagram is None
+        assert telemetry["diagram_retry_error"]
+        assert len(ext.notes) == 1

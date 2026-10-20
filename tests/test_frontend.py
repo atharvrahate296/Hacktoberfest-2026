@@ -190,3 +190,89 @@ def test_rendered_panels_escape_model_text(html: str):
 
 def test_default_model_is_documented(html: str):
     assert ai_client.DEFAULT_MODEL in ai_client.KNOWN_MODELS
+
+
+class TestSettingsScreen:
+    """The API key is entered, tested and saved from inside the app."""
+
+    def test_the_settings_button_exists(self, html: str):
+        assert 'id="settingsBtn"' in html
+
+    def test_the_key_is_entered_in_a_password_field(self, html: str):
+        assert 'id="apiKeyInput"' in html
+        assert 'type="password"' in html
+
+    def test_the_key_is_never_rendered_back_into_the_page(self, html: str):
+        """The key is write-only: the page shows a masked form, never the key."""
+        assert 'id="keyState"' in html
+        assert "api_key_masked" in html
+        # No code path writes the submitted key back into the document.
+        assert "$('apiKeyInput').value = key" not in html
+
+    def test_there_is_a_connection_test(self, html: str):
+        assert 'id="testKeyBtn"' in html
+        assert "/api/settings/api-key/test" in html
+
+    def test_there_is_a_save_and_a_remove(self, html: str):
+        assert 'id="saveKeyBtn"' in html
+        assert 'id="clearKeyBtn"' in html
+        assert "/api/settings/api-key" in html
+
+    def test_the_key_is_cleared_from_the_input_after_saving(self, html: str):
+        assert '$("apiKeyInput").value = "";' in html
+
+    def test_the_test_result_says_what_happened(self, html: str):
+        assert "function keyResult" in html
+        assert "keyMessage(\"ok\", keyResult(data))" in html
+
+    def test_a_failed_analysis_offers_the_settings_screen(self, html: str):
+        assert 'id="errSettingsBtn"' in html
+        assert '$("errSettingsBtn").onclick = () => openSettings();' in html
+
+    def test_a_plain_http_connection_is_flagged(self, html: str):
+        """A key typed into an insecure page travels in the clear."""
+        assert 'id="keyTransportNote"' in html
+        assert "function warnAboutPlaintext" in html
+        assert "not served over HTTPS" in html
+
+
+class TestGuideAndGradeTabs:
+    def test_the_guide_tab_exists(self, html: str):
+        assert '["guide","Guide"' in html
+        assert "function renderGuide" in html
+
+    def test_the_grade_tab_exists(self, html: str):
+        assert '["grade","Grade"' in html
+        assert "function renderGrade" in html
+
+    def test_the_grade_is_shown_next_to_the_title(self, html: str):
+        assert "Grade ${esc(d.assessment.score)}/100" in html
+
+    def test_the_guide_content_is_escaped(self, html: str):
+        for field in ("g.overview", "s.detail", "c.term || c.meaning", "c.meaning"):
+            assert f"esc({field})" in html, f"{field} reaches innerHTML unescaped"
+
+    def test_the_grade_content_is_escaped(self, html: str):
+        for field in ("c.criterion", "c.evidence", "a.rationale"):
+            assert f"esc({field})" in html, f"{field} reaches innerHTML unescaped"
+
+
+class TestChangesAreSurfaced:
+    """A change to the user's own drawing must be visible, with a reason."""
+
+    def test_deviations_are_rendered(self, html: str):
+        assert "function renderReview" in html
+        assert "Changes to your original idea" in html
+
+    def test_a_deviation_shows_what_changed_and_why(self, html: str):
+        assert "esc(v.change)" in html
+        assert "esc(v.why)" in html
+
+    def test_the_needs_review_tab_counts_the_changes(self, html: str):
+        assert "d.uncertain_text.length + (d.deviations || []).length" in html
+
+    def test_the_diagram_tab_points_at_the_review_tab(self, html: str):
+        assert 'id="jumpReviewBtn"' in html
+
+    def test_the_changes_are_exported(self, html: str):
+        assert "## Changes to the original idea" in html

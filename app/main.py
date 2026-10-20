@@ -1,21 +1,26 @@
 """Scribble2Structure -- from messy thinking to structured knowledge.
 
 FastAPI app: validation, cloud Gemma inference via the Gemini API,
-transformation mode routing, sample gallery endpoint, and structured knowledge
-responses.
+transformation mode routing, sample gallery endpoint, structured knowledge
+responses, objective grading of the reconstruction, and the Settings screen
+where the API key is entered and tested.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import threading
+import time
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
+from urllib.parse import urlsplit
 
-from . import ai_client, prompts, validation
+from . import ai_client, grading, prompts, settings, validation
 
 app = FastAPI(
     title="Scribble2Structure",
@@ -112,6 +117,181 @@ def config() -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Settings: the API key, entered and tested in the app itself
+# ---------------------------------------------------------------------------
+
+# Connection tests are cheap but not free, and they are the one endpoint
+# that takes a secret from the browser. Both facts are handled here rather
+# than in the client: at most a few tests a minute, and a key that is never
+# echoed back.
+_MAX_TESTS_PER_MINUTE = 6
+
+_test_times: list[float] = []
+_test_lock = threading.Lock()
+
+
+class ApiKeyRequest(BaseModel):
+    """The body of a key submission. The key is write-only."""
+
+    api_key: str = Field(default="", max_length=400)
+    model: str | None = Field(default=None, max_length=120)
+
+
+def _same_origin(request: Request) -> bool:
+    """True when the request came from this app's own page.
+
+    The key endpoint is the one place a secret is accepted, so a page on
+    another site must not be able to post to it. A request with no Origin
+    header is a same-origin fetch or a command-line client, both fine.
+    """
+    origin = request.headers.get("origin")
+    if not origin:
+        return True
+    host = request.headers.get("host", "")
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    return bool(parsed.netloc) and parsed.netloc == host
+
+
+def _reject_cross_origin(request: Request) -> JSONResponse | None:
+    """A 403 response when the request did not come from this app."""
+    if _same_origin(request):
+        return None
+    return JSONResponse(
+        {
+            "ok": False,
+            "message": "This request came from another site, so it was refused.",
+        },
+        status_code=403,
+    )
+
+
+def _rate_limited() -> bool:
+    """True when too many connection tests were made in the last minute."""
+    now = time.monotonic()
+    with _test_lock:
+        _test_times[:] = [stamp for stamp in _test_times if now - stamp < 60.0]
+        if len(_test_times) >= _MAX_TESTS_PER_MINUTE:
+            return True
+        _test_times.append(now)
+    return False
+
+
+def _settings_status() -> dict:
+    """What the Settings screen needs to show. Never the key itself."""
+    key = ai_client.api_key()
+    return {
+        "api_key_present": bool(key),
+        "api_key_masked": settings.mask_key(key),
+        "api_key_source": settings.key_source(),
+        "model": ai_client.model_id(),
+        "model_chain": ai_client.model_chain(),
+        "endpoint": ai_client.endpoint_url(),
+        "known_models": list(ai_client.KNOWN_MODELS),
+        "store": settings.display_path(),
+    }
+
+
+@app.get("/api/settings")
+def get_settings() -> dict:
+    """The current settings, with the key masked."""
+    return _settings_status()
+
+
+@app.post("/api/settings/api-key/test")
+def test_api_key(payload: ApiKeyRequest, request: Request) -> JSONResponse:
+    """Check a key without saving it.
+
+    The key is validated for shape first, so a pasted sentence costs no
+    request, then used for a single minimal call. It is never stored and
+    never returned.
+    """
+    refused = _reject_cross_origin(request)
+    if refused is not None:
+        return refused
+
+    if _rate_limited():
+        return JSONResponse(
+            {
+                "ok": False,
+                "message": "Too many connection tests in a row. Wait a minute and try again.",
+                "model": ai_client.model_id(),
+            },
+            status_code=429,
+        )
+
+    problem = settings.validate_key_format(payload.api_key)
+    if problem:
+        return JSONResponse(
+            {
+                "ok": False,
+                "message": problem,
+                "model": ai_client.model_id(),
+            },
+            status_code=400,
+        )
+
+    result = ai_client.test_api_key(payload.api_key.strip(), payload.model)
+    return JSONResponse(result, status_code=200 if result.get("ok") else 502)
+
+
+@app.post("/api/settings/api-key")
+def save_api_key(payload: ApiKeyRequest, request: Request) -> JSONResponse:
+    """Test a key and, if it works, save it for this machine.
+
+    The key is stored in a local file that only this user can read and is
+    never sent to the browser again -- the Settings screen only ever shows
+    a masked form of it.
+    """
+    refused = _reject_cross_origin(request)
+    if refused is not None:
+        return refused
+
+    if _rate_limited():
+        return JSONResponse(
+            {
+                "ok": False,
+                "message": "Too many attempts in a row. Wait a minute and try again.",
+            },
+            status_code=429,
+        )
+
+    problem = settings.validate_key_format(payload.api_key)
+    if problem:
+        return JSONResponse({"ok": False, "message": problem}, status_code=400)
+
+    key = payload.api_key.strip()
+    result = ai_client.test_api_key(key, payload.model)
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=502)
+
+    settings.save_key(key)
+    # The cached client still holds the old key; drop it so the next request
+    # uses the one that was just saved.
+    ai_client.reset_client()
+    status = _settings_status()
+    status["ok"] = True
+    status["message"] = result.get("message", "The key works and has been saved.")
+    return JSONResponse(status)
+
+
+@app.delete("/api/settings/api-key")
+def delete_api_key(request: Request) -> JSONResponse:
+    """Forget the saved key."""
+    refused = _reject_cross_origin(request)
+    if refused is not None:
+        return refused
+
+    settings.clear_key()
+    ai_client.reset_client()
+    status = _settings_status()
+    status["ok"] = True
+    return JSONResponse(status)
+
+
 @app.get("/api/samples")
 def get_samples() -> list[dict]:
     """Return available sample inputs for the sample gallery."""
@@ -155,6 +335,20 @@ async def analyze(
     except ai_client.InferenceError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    diagram_source = ""
+    diagram_type = ""
+    if extraction.diagram:
+        diagram_source = extraction.diagram.get("mermaid", "")
+        diagram_type = extraction.diagram.get("type", "")
+
+    assessment = grading.assess(
+        extraction,
+        coverage=extraction.coverage,
+        diagram_source=diagram_source,
+        diagram_type=diagram_type,
+        mode=extraction.detected_mode or extraction.mode or "auto",
+    )
+
     return JSONResponse(
         {
             "title": extraction.title,
@@ -170,6 +364,10 @@ async def analyze(
             "sql_schema": extraction.sql_schema,
             "suggestions": extraction.suggestions,
             "warnings": extraction.warnings,
+            "coverage": extraction.coverage,
+            "deviations": extraction.deviations,
+            "guide": extraction.guide,
+            "assessment": assessment,
             "source": {
                 "filename": checked.filename,
                 "width": checked.width,

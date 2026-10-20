@@ -157,6 +157,80 @@ padding:6px;box-shadow:0 12px 32px rgba(20,22,28,.1);display:flex;flex-direction
 .pop button:hover{background:var(--acc-s);color:var(--acc)}
 .pop hr{border:0;border-top:1px solid var(--line);margin:4px 0;width:100%}
 
+/* Settings */
+.gear{background:none;border:1px solid var(--line);border-radius:10px;padding:6px 9px;display:inline-flex;align-items:center;gap:7px;
+ font-size:13.5px;font-weight:500;color:var(--mut);transition:border-color .15s,color .15s}
+.gear:hover{border-color:var(--acc);color:var(--acc)}
+.gear svg{width:16px;height:16px;stroke:currentColor}
+.sheet{position:fixed;inset:0;background:rgba(15,17,22,.5);z-index:80;display:none;align-items:flex-start;justify-content:center;padding:8vh 20px 20px;overflow:auto}
+.sheet.open{display:flex}
+.sheet-card{background:var(--card);border-radius:16px;width:100%;max-width:520px;box-shadow:0 24px 60px rgba(15,17,22,.22);padding:26px}
+.sheet-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:6px}
+.sheet-head h2{margin:0;font:400 24px/1.2 var(--serif)}
+.sheet-head p{margin:4px 0 0;color:var(--mut);font-size:13.5px}
+.sheet-close{background:none;border:0;font-size:24px;line-height:1;color:var(--mut);padding:0 4px}
+.sheet-close:hover{color:var(--ink)}
+.field{margin-top:18px;display:flex;flex-direction:column;gap:7px}
+.field label{font-size:13px;font-weight:600}
+.field .hint{font-size:12.5px;color:var(--mut)}
+.keyrow{display:flex;gap:8px;align-items:center}
+.keyrow input{flex:1;min-width:0}
+.input{width:100%;padding:10px 13px;border:1px solid var(--line);border-radius:10px;background:var(--card);font:14px var(--mono)}
+.input:focus{outline:0;border-color:var(--acc)}
+.keystate{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--mut);flex-wrap:wrap}
+.keystate .dot{width:8px;height:8px;border-radius:50%;background:var(--good)}
+.keystate .dot.off{background:#c9ccd6}
+.msg{border-radius:10px;padding:10px 13px;font-size:13.5px;margin-top:14px;display:none}
+.msg.show{display:block}
+.msg.ok{background:#ecfdf3;color:var(--good)}
+.msg.bad{background:#fef2f2;color:var(--bad)}
+.msg.busy{background:var(--acc-s);color:#2b3bb5}
+.sheet .row{margin-top:18px}
+.sheet-note{margin-top:18px;padding-top:14px;border-top:1px solid var(--line);font-size:12.5px;color:var(--mut)}
+.sheet-note code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
+
+/* Grade */
+.grade-top{display:flex;gap:22px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+.grade-score{font:400 46px/1 var(--serif);color:var(--acc)}
+.grade-score small{font:500 15px var(--sans);color:var(--mut)}
+.grade-band{display:inline-flex;align-items:center;gap:7px;padding:4px 11px;border-radius:99px;font-size:12.5px;font-weight:600}
+.grade-band.high{background:#ecfdf3;color:var(--good)}
+.grade-band.medium{background:#fef9c3;color:var(--warn)}
+.grade-band.low{background:#fee2e2;color:var(--bad)}
+.crit{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:10px}
+.crit-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:6px}
+.crit-head strong{font-size:14.5px;font-weight:600}
+.crit-score{font-size:13px;color:var(--mut);font-variant-numeric:tabular-nums}
+.bar{height:6px;border-radius:99px;background:var(--bg);overflow:hidden;margin:8px 0}
+.bar i{display:block;height:100%;border-radius:99px;background:var(--acc)}
+.bar i.partial{background:#e0a82e}
+.bar i.gap{background:var(--bad)}
+.crit p{margin:0;font-size:13.5px;color:var(--mut)}
+.verdict{font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:1px 8px;border-radius:99px}
+.verdict.strong{background:#ecfdf3;color:var(--good)}
+.verdict.partial{background:#fef9c3;color:var(--warn)}
+.verdict.gap{background:#fee2e2;color:var(--bad)}
+
+/* Guide */
+.guide-step{display:flex;gap:14px;align-items:flex-start;padding:13px 0;border-bottom:1px solid var(--line)}
+.guide-step:last-child{border-bottom:0}
+.guide-step .n{color:var(--acc);font-weight:600;min-width:22px;padding-top:1px}
+.guide-step b{display:block;font-weight:600;margin-bottom:2px}
+.guide-step span{color:var(--mut);font-size:14px}
+.guide-concept{border-left:3px solid var(--acc);padding:2px 0 2px 14px;margin-bottom:12px}
+.guide-concept b{display:block;font-weight:600}
+.guide-concept span{color:var(--mut);font-size:14px}
+.next-step{display:flex;gap:11px;align-items:baseline;padding:9px 0;border-bottom:1px solid var(--line)}
+.next-step:last-child{border-bottom:0}
+.next-step .tick{color:var(--acc)}
+
+/* Deviations */
+.dev{border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:0 12px 12px 0;padding:12px 15px;margin-bottom:10px;background:var(--card)}
+.dev b{display:block;font-weight:600;margin-bottom:3px}
+.dev .why{color:var(--mut);font-size:13.5px}
+.dev .basis{display:inline-block;margin-top:7px;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);
+ background:var(--bg);padding:1px 8px;border-radius:99px}
+
 .spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
 .loading .spinner{width:26px;height:26px;border-color:var(--line);border-top-color:var(--acc)}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -177,6 +251,13 @@ padding:6px;box-shadow:0 12px 32px rgba(20,22,28,.1);display:flex;flex-direction
   <div class="status">
     <span id="modelTag">loading…</span>
     <span class="pill" id="tokenTag">Model ready</span>
+    <button class="gear" id="settingsBtn" aria-haspopup="dialog">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 008 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.65 1.65 0 004.6 15a1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 4.6a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+      </svg>
+      Settings
+    </button>
   </div>
 </header>
 
@@ -241,6 +322,51 @@ padding:6px;box-shadow:0 12px 32px rgba(20,22,28,.1);display:flex;flex-direction
   <img id="modalImg" alt="Full size preview" />
 </div>
 
+<div class="sheet" id="settingsSheet" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+  <div class="sheet-card">
+    <div class="sheet-head">
+      <div>
+        <h2 id="settingsTitle">Settings</h2>
+        <p>Connect the app to the Gemini API with your own key.</p>
+      </div>
+      <button class="sheet-close" id="settingsClose" aria-label="Close settings">&times;</button>
+    </div>
+
+    <div class="keystate">
+      <span class="dot off" id="keyDot"></span>
+      <span id="keyState">Checking…</span>
+    </div>
+
+    <div class="field">
+      <label for="apiKeyInput">Gemini API key</label>
+      <div class="keyrow">
+        <input class="input" id="apiKeyInput" type="password" autocomplete="off" spellcheck="false"
+               placeholder="AIza…" aria-describedby="keyHint" />
+        <button class="btn sm" id="revealKeyBtn" type="button" aria-label="Show the key">Show</button>
+      </div>
+      <p class="hint" id="keyHint">Get one free at
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.
+        The key is tested against the API before it is saved, and it never comes back to this page.</p>
+    </div>
+
+    <div class="msg" id="keyMsg" role="status"></div>
+
+    <p class="hint" id="keyTransportNote" style="display:none;margin-top:12px"></p>
+
+    <div class="row">
+      <button class="btn" id="testKeyBtn">Test connection</button>
+      <button class="btn on" id="saveKeyBtn">Save key</button>
+      <button class="btn danger" id="clearKeyBtn">Remove key</button>
+    </div>
+
+    <div class="sheet-note">
+      The key is stored on this machine only, in <code id="keyStorePath">a local file</code>, readable by your
+      user account alone. It is never sent to the browser again, never written to the page, and never committed
+      to the repository. The model in use is <strong id="settingsModel">…</strong>.
+    </div>
+  </div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => (s == null ? "" : String(s)).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -276,7 +402,7 @@ fetch("/api/config").then(r => r.json()).then(c => {
   if (c.max_mb) $("maxMb").textContent = c.max_mb;
   if (!c.api_key_present) {
     $("tokenTag").textContent = "API key missing"; $("tokenTag").className = "pill token-warn";
-    banner("warn", `<strong>No Gemini API key.</strong><span>Add <code>GEMINI_API_KEY</code> to your <code>.env</code> file (create a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>), then restart the app.</span>`);
+    banner("warn", `<strong>No Gemini API key.</strong><span>Add it in <button class="btn sm" id="bannerSettingsBtn">Settings</button>, or set <code>GEMINI_API_KEY</code> in your <code>.env</code> file. Keys are free at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</span>`);
   }
 }).catch(() => {});
 
@@ -306,6 +432,168 @@ const MODE_DESCS = {
 };
 function updateModeDesc(){ $("modeDesc").textContent = MODE_DESCS[$("modeSelect").value] || ""; }
 $("modeSelect").onchange = updateModeDesc;
+
+// ---------------------------------------------------------------------------
+// Settings: enter, test and save the API key without leaving the app
+// ---------------------------------------------------------------------------
+let settingsState = null;
+
+function keyMessage(kind, text){
+  const box = $("keyMsg");
+  box.className = "msg show " + kind;
+  box.textContent = text;
+}
+
+// The result of a connection test, in the words of someone who was told
+// what went wrong.
+function keyResult(result){
+  if (result.ok){
+    const ms = result.elapsed_ms ? ` (${result.elapsed_ms} ms)` : "";
+    return `The key works. ${result.model || ""} answered the test request${ms}.`;
+  }
+  return result.message || "The key was rejected.";
+}
+
+function paintSettings(s){
+  settingsState = s;
+  const present = !!(s && s.api_key_present);
+  $("keyDot").className = "dot" + (present ? "" : " off");
+  const source = s && s.api_key_source;
+  const where = source === "store" ? "saved on this machine"
+    : source === "environment" ? "read from your .env file" : "not set yet";
+  $("keyState").textContent = present
+    ? `A key is ${where} (${s.api_key_masked}).`
+    : "No API key yet. Paste one below to connect the app.";
+  if (s && s.model) $("settingsModel").textContent = s.model;
+  if (s && s.store) $("keyStorePath").textContent = s.store;
+  $("clearKeyBtn").disabled = !present;
+}
+
+async function loadSettings(){
+  try {
+    const r = await fetch("/api/settings");
+    const s = await r.json();
+    paintSettings(s);
+    return s;
+  } catch (e) {
+    $("keyState").textContent = "Could not read the settings.";
+    return null;
+  }
+}
+
+function openSettings(){
+  $("settingsSheet").classList.add("open");
+  $("apiKeyInput").value = "";
+  $("keyMsg").className = "msg";
+  loadSettings();
+  warnAboutPlaintext();
+  setTimeout(() => $("apiKeyInput").focus(), 60);
+}
+function closeSettings(){ $("settingsSheet").classList.remove("open"); }
+
+// A key pasted into a page served over plain HTTP travels in the clear.
+// On localhost that is fine; on a shared network it is not, so it is said
+// out loud rather than left for the user to work out.
+function warnAboutPlaintext(){
+  const host = (location.hostname || "");
+  const local = host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "";
+  const note = $("keyTransportNote");
+  if (!note) return;
+  if (location.protocol === "https:" || local){
+    note.style.display = "none";
+    return;
+  }
+  note.style.display = "block";
+  note.textContent = "This page is not served over HTTPS, so the key travels to the "
+    + "server in the clear. Use it only on a network you trust.";
+}
+
+$("settingsBtn").onclick = openSettings;
+$("settingsClose").onclick = closeSettings;
+$("settingsSheet").onclick = e => { if (e.target === $("settingsSheet")) closeSettings(); };
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape"){ $("imgModal").style.display = "none"; closeSettings(); }
+});
+
+$("revealKeyBtn").onclick = () => {
+  const input = $("apiKeyInput");
+  const hidden = input.type === "password";
+  input.type = hidden ? "text" : "password";
+  $("revealKeyBtn").textContent = hidden ? "Hide" : "Show";
+};
+
+async function postKey(path, key){
+  const res = await fetch(path, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({api_key: key})
+  });
+  const data = await res.json().catch(() => ({ok: false, message: `Server error ${res.status}`}));
+  return {status: res.status, data};
+}
+
+$("testKeyBtn").onclick = async () => {
+  const key = $("apiKeyInput").value.trim();
+  if (!key){ keyMessage("bad", "Paste your Gemini API key first."); return; }
+  $("testKeyBtn").disabled = true;
+  keyMessage("busy", "Testing the key against the Gemini API…");
+  try {
+    const {status, data} = await postKey("/api/settings/api-key/test", key);
+    if (status === 200 && data.ok){
+      keyMessage("ok", keyResult(data));
+      paintSettings({...(settingsState || {}), api_key_present: true});
+    } else {
+      keyMessage("bad", data.message || "The key was rejected.");
+    }
+  } catch (e) {
+    keyMessage("bad", "Could not reach the server: " + e.message);
+  } finally {
+    $("testKeyBtn").disabled = false;
+  }
+};
+
+$("saveKeyBtn").onclick = async () => {
+  const key = $("apiKeyInput").value.trim();
+  if (!key){ keyMessage("bad", "Paste your Gemini API key first."); return; }
+  $("saveKeyBtn").disabled = true;
+  keyMessage("busy", "Testing the key, then saving it on this machine…");
+  try {
+    const {status, data} = await postKey("/api/settings/api-key", key);
+    if (status === 200 && data.ok){
+      keyMessage("ok", (data.message || "The key works.") + " It is now saved on this machine.");
+      $("apiKeyInput").value = "";
+      paintSettings(data);
+      const tag = $("tokenTag");
+      tag.textContent = "Model ready"; tag.className = "pill";
+      $("runBtn").disabled = !selectedFile;
+      toast("API key saved");
+    } else {
+      keyMessage("bad", data.message || "The key was rejected.");
+    }
+  } catch (e) {
+    keyMessage("bad", "Could not reach the server: " + e.message);
+  } finally {
+    $("saveKeyBtn").disabled = false;
+  }
+};
+
+$("clearKeyBtn").onclick = async () => {
+  if (!confirm("Remove the saved API key from this machine?")) return;
+  try {
+    const r = await fetch("/api/settings/api-key", {method: "DELETE"});
+    const s = await r.json();
+    paintSettings(s);
+    keyMessage("busy", "The saved key was removed.");
+    const tag = $("tokenTag");
+    tag.textContent = "API key missing"; tag.className = "pill token-warn";
+  } catch (e) {
+    keyMessage("bad", "Could not reach the server: " + e.message);
+  }
+};
+
+document.addEventListener("click", e => {
+  if (e.target && e.target.id === "bannerSettingsBtn") openSettings();
+});
 
 // Image input
 const drop = $("drop");
@@ -377,10 +665,14 @@ $("runBtn").onclick = async () => {
     paintResult();
   } catch (err) {
     const aborted = err.name === "AbortError";
+    const needsKey = !aborted && /api key/i.test(err.message || "");
     $("out").innerHTML = `<div class="banner bad"><strong>${aborted ? "Cancelled" : "Analysis failed"}</strong>
       <span>${esc(aborted ? "Stopped waiting for the server. The model may still be running on it." : err.message)}</span>
-      <button class="btn sm" id="retryBtn">Try again</button></div>`;
+      <div class="row" style="margin-top:4px">
+        ${needsKey ? `<button class="btn sm" id="errSettingsBtn">Open settings</button>` : ""}
+        <button class="btn sm" id="retryBtn">Try again</button></div></div>`;
     $("retryBtn").onclick = () => $("runBtn").click();
+    if ($("errSettingsBtn")) $("errSettingsBtn").onclick = () => openSettings();
   } finally {
     clearInterval(tick);
     $("runBtn").disabled = false; $("runBtn").textContent = "Analyze image";
@@ -388,11 +680,18 @@ $("runBtn").onclick = async () => {
 };
 
 // Rendering
+function guideCount(d){
+  const g = d.guide || {};
+  return (g.steps || []).length + (g.concepts || []).length
+    + (g.next_steps || []).length + (g.overview ? 1 : 0);
+}
 function tabsOf(d){
   return [["notes","Notes",d.notes.length],["takeaways","Takeaways",d.takeaways.length],
     ["actions","Actions",d.action_items.length],["diagram","Diagram",d.diagram ? 1 : 0],
-    ["sql","SQL",d.sql_schema ? 1 : 0],["suggestions","Suggestions",d.suggestions.length],
-    ["uncertain","Needs review",d.uncertain_text.length]];
+    ["sql","SQL",d.sql_schema ? 1 : 0],["guide","Guide",guideCount(d)],
+    ["grade","Grade",d.assessment ? 1 : 0],
+    ["suggestions","Suggestions",d.suggestions.length],
+    ["uncertain","Needs review",d.uncertain_text.length + (d.deviations || []).length]];
 }
 const edited = () => { hasUnsavedEdits = true; if ($("resetBtn")) $("resetBtn").disabled = false; };
 
@@ -416,6 +715,7 @@ function paintResult(){
           ${d.source.width ? `<span>${d.source.width}×${d.source.height}</span>` : ""}
           <span>${((t.elapsed_ms || 0) / 1000).toFixed(1)} s</span>
           ${t.attempts > 1 ? `<span>${t.attempts} attempts</span>` : ""}
+          ${d.assessment ? `<span title="${esc(d.assessment.rationale || "")}">Grade ${esc(d.assessment.score)}/100 · ${esc(d.assessment.confidence)}</span>` : ""}
         </div>
       </div>
       <div class="actions">
@@ -436,6 +736,7 @@ function paintResult(){
   if (si) { const fit = () => { si.style.height = "auto"; si.style.height = si.scrollHeight + "px"; };
     fit(); si.oninput = e => { currentResult.summary = e.target.value; fit(); edited(); }; }
   if ($("compareBtn")) $("compareBtn").onclick = () => { showSideBySide = !showSideBySide; paintResult(); };
+  if ($("jumpReviewBtn")) $("jumpReviewBtn").onclick = () => { activeTab = "uncertain"; paintResult(); };
   $("resetBtn").onclick = () => {
     if (!confirm("Discard your edits and restore the original result?")) return;
     currentResult = JSON.parse(JSON.stringify(originalResult)); hasUnsavedEdits = false; paintResult();
@@ -478,6 +779,8 @@ function renderTab(d){
   if (activeTab === "diagram") return !d.diagram
     ? none("Nothing to reconstruct", "This image didn't yield a diagram the validator would accept.")
     : `<div class="card mbox" id="mermaidBox"><div class="mermaid" id="mmdMain">${esc(d.diagram.mermaid)}</div></div>
+      ${d.diagram.type === "erDiagram" ? `<div class="hint" style="margin:12px 0 0">Reading the notation: <code>||</code> exactly one · <code>|o</code> zero or one · <code>o{</code> zero or more · <code>|{</code> one or more. <code>PK</code> is a primary key and <code>FK</code> a foreign key.</div>` : ""}
+      ${(d.deviations || []).length ? `<div class="hint" style="margin:10px 0 0">${d.deviations.length} change${d.deviations.length === 1 ? "" : "s"} were made to get this diagram to draw — see <button class="btn sm" id="jumpReviewBtn">Needs review</button>.</div>` : ""}
       <div class="tools">
         <button class="btn" id="toggleEditorBtn">Edit source</button>
         <button class="btn" id="copyMmdBtn">Copy source</button>
@@ -490,11 +793,74 @@ function renderTab(d){
         <div class="tools"><button class="btn on" id="updateDiagramBtn">Update diagram</button></div>
       </div>`;
   if (activeTab === "sql") return d.sql_schema ? `<div class="tools" style="margin:0 0 12px"><button class="btn sm" id="copySqlBtn">Copy SQL</button></div><pre class="src">${esc(d.sql_schema)}</pre>` : none("No SQL schema");
+  if (activeTab === "guide") return renderGuide(d);
+  if (activeTab === "grade") return renderGrade(d);
   if (activeTab === "suggestions") return `<div class="banner info"><strong>Suggested next steps</strong><span>These are ideas from the model, not text read from your image.</span></div>`
     + (d.suggestions.map((s, i) => `<div class="item"><span class="n">${i + 1}</span><div>${esc(s)}</div></div>`).join("") || none("No suggestions"));
-  if (activeTab === "uncertain") return d.uncertain_text.map(u =>
-    `<div class="uncertain"><b>${esc(u.text_or_location)}</b><span>${esc(u.reason)}</span></div>`).join("") || none("Nothing to review", "Everything looked legible.");
+  if (activeTab === "uncertain") return renderReview(d);
   return "";
+}
+
+// The teaching layer: what the drawing means, in words, for someone who
+// cannot read the diagram itself.
+function renderGuide(d){
+  const g = d.guide || {};
+  const none = (h, p) => `<div class="empty" style="padding-top:40px"><h3 style="color:var(--ink);margin:0 0 4px">${h}</h3><p>${p || ""}</p></div>`;
+  if (!guideCount(d)) return none("No walkthrough", "The model did not return a guide for this image.");
+  const steps = (g.steps || []).map((s, i) => `
+    <div class="guide-step"><span class="n">${i + 1}</span>
+      <div>${s.title ? `<b>${esc(s.title)}</b>` : ""}<span>${esc(s.detail)}</span></div></div>`).join("");
+  const concepts = (g.concepts || []).map(c => `
+    <div class="guide-concept"><b>${esc(c.term || c.meaning)}</b>${c.term ? `<span>${esc(c.meaning)}</span>` : ""}</div>`).join("");
+  const next = (g.next_steps || []).map(s => `
+    <div class="next-step"><span class="tick">→</span><div>${esc(s)}</div></div>`).join("");
+  return `
+    ${g.overview ? `<section class="blk"><h3>What this drawing is about</h3><ul><li>${esc(g.overview)}</li></ul></section>` : ""}
+    ${steps ? `<section class="blk"><h3>What to notice</h3>${steps}</section>` : ""}
+    ${concepts ? `<section class="blk"><h3>Words to know</h3>${concepts}</section>` : ""}
+    ${next ? `<section class="blk"><h3>Where to go next</h3>${next}</section>` : ""}`;
+}
+
+// The grade: how faithful this reconstruction is, and where it is weakest.
+function renderGrade(d){
+  const a = d.assessment;
+  const none = (h, p) => `<div class="empty" style="padding-top:40px"><h3 style="color:var(--ink);margin:0 0 4px">${h}</h3><p>${p || ""}</p></div>`;
+  if (!a || !a.criteria || !a.criteria.length) return none("No grade", "There was not enough output to grade.");
+  const criteria = a.criteria.map(c => {
+    const score = Math.max(0, Math.min(100, Number(c.score) || 0));
+    return `<div class="crit">
+      <div class="crit-head"><strong>${esc(c.criterion)}</strong>
+        <span class="crit-score">${esc(score)}/100 <span class="verdict ${esc(c.verdict)}">${esc(c.verdict)}</span></span></div>
+      <div class="bar"><i class="${esc(c.verdict)}" style="width:${score}%"></i></div>
+      <p>${esc(c.evidence)}</p></div>`;
+  }).join("");
+  const gaps = (a.gaps || []).length ? `<section class="blk"><h3>Worth a second look</h3><ul>${a.gaps.map(g => `<li>${esc(g)}</li>`).join("")}</ul></section>` : "";
+  return `
+    <div class="grade-top">
+      <div class="grade-score">${esc(Number(a.score) || 0)}<small>/100</small></div>
+      <span class="grade-band ${esc(a.confidence)}">${esc(a.confidence)} confidence</span>
+    </div>
+    ${a.rationale ? `<p class="hint" style="margin:0 0 18px">${esc(a.rationale)}</p>` : ""}
+    ${criteria}
+    ${gaps}`;
+}
+
+// Needs review: what changed in the original idea, and what is still unclear.
+function renderReview(d){
+  const none = (h, p) => `<div class="empty" style="padding-top:40px"><h3 style="color:var(--ink);margin:0 0 4px">${h}</h3><p>${p || ""}</p></div>`;
+  const devs = d.deviations || [];
+  const devHtml = devs.length ? `<section class="blk">
+    <h3>Changes to your original idea</h3>
+    <p class="hint">What was changed in your drawing, and why it was necessary.</p>
+    ${devs.map(v => `<div class="dev">
+      <b>${esc(v.change)}</b>
+      ${v.why ? `<div class="why">Why: ${esc(v.why)}</div>` : ""}
+      ${v.basis ? `<span class="basis">${esc(v.basis)}</span>` : ""}
+    </div>`).join("")}</section>` : "";
+  const unclear = d.uncertain_text.map(u =>
+    `<div class="uncertain"><b>${esc(u.text_or_location)}</b><span>${esc(u.reason)}</span></div>`).join("");
+  const unclearHtml = unclear || `<div class="empty" style="padding-top:24px"><h3 style="color:var(--ink);margin:0 0 4px">Nothing unclear</h3><p>Everything in the drawing was legible.</p></div>`;
+  return devHtml + unclearHtml;
 }
 
 window.toggleTask = i => {
@@ -557,6 +923,11 @@ function mountExports(){
 
 function generateMarkdown(d){
   const L = [`# ${d.title}`, "", `*Made with Scribble2Structure using ${d.telemetry?.model || "a vision-language model"}*`, ""];
+  if (d.assessment && d.assessment.score !== undefined){
+    L.push(`> **Fidelity grade: ${d.assessment.score}/100 (${d.assessment.confidence})**`, "> ", `> ${d.assessment.rationale || ""}`, "");
+    (d.assessment.criteria || []).forEach(c => L.push(`> - ${c.criterion}: ${c.score}/100 (${c.verdict}) — ${c.evidence}`));
+    L.push("");
+  }
   if (d.summary) L.push("## Summary", "", d.summary, "");
   if (d.notes.length) { L.push("## Notes", ""); d.notes.forEach(n => { L.push(`### ${n.heading} (${n.confidence})`); n.content.forEach(c => L.push(`- ${c}`)); L.push(""); }); }
   if (d.takeaways.length) { L.push("## Key takeaways", ""); d.takeaways.forEach((t, i) => L.push(`${i + 1}. ${t}`)); L.push(""); }
@@ -564,7 +935,20 @@ function generateMarkdown(d){
     L.push(`- ${a.done ? "[x]" : "[ ]"} ${a.task}${a.owner ? ` *(owner: ${a.owner})*` : ""}${a.deadline ? ` *(due: ${a.deadline})*` : ""}`)); L.push(""); }
   if (d.diagram?.mermaid) { L.push("## Diagram", "", "```mermaid", d.diagram.mermaid.trim(), "```", ""); if (d.diagram_explanation) L.push(d.diagram_explanation, ""); }
   if (d.sql_schema) L.push("## SQL schema", "", "```sql", d.sql_schema.trim(), "```", "");
+  if ((d.guide?.steps || []).length || d.guide?.overview){
+    L.push("## Guide", "");
+    if (d.guide.overview) L.push(d.guide.overview, "");
+    (d.guide.steps || []).forEach((s, i) => L.push(`${i + 1}. **${s.title || "Step " + (i + 1)}** — ${s.detail}`));
+    (d.guide.concepts || []).forEach(c => L.push(`- **${c.term || "Term"}**: ${c.meaning}`));
+    (d.guide.next_steps || []).forEach(s => L.push(`- Next: ${s}`));
+    L.push("");
+  }
   if (d.suggestions.length) { L.push("## AI suggestions", ""); d.suggestions.forEach(s => L.push(`- ${s}`)); L.push(""); }
+  if ((d.deviations || []).length) {
+    L.push("## Changes to the original idea", "");
+    d.deviations.forEach(v => L.push(`- **${v.change}**${v.why ? ` — ${v.why}` : ""}`));
+    L.push("");
+  }
   if (d.uncertain_text.length) { L.push("## Needs review", ""); d.uncertain_text.forEach(u => L.push(`- **${u.text_or_location}**: ${u.reason}`)); L.push(""); }
   L.push("---", "*Check AI output before you rely on it.*");
   return L.join("\n");
@@ -707,6 +1091,7 @@ function planCard(d){
   if (d.detected_mode) bits.push(d.detected_mode);
   else if (d.mode && d.mode !== "auto") bits.push(d.mode);
   if (d.source && d.source.filename) bits.push(d.source.filename);
+  if (d.assessment && d.assessment.score !== undefined) bits.push(`grade ${d.assessment.score}/100 (${d.assessment.confidence})`);
   add({ type: "meta", lines: [bits.join("  ·  ")], font: fMeta, gap: 26 });
 
   if (d.summary) add({ type: "text", text: d.summary, font: fBody, gap: 26 });
@@ -731,6 +1116,15 @@ function planCard(d){
       meta: [a.owner ? "owner: " + a.owner : "unassigned", a.deadline ? "due: " + a.deadline : "not stated"].join(" · "),
       done: !!a.done,
     })), font: fBody, gap: 16,
+  });
+
+  if ((d.deviations || []).length) add({
+    type: "list", title: "Changes to your original idea",
+    items: d.deviations.slice(0, CARD.maxItems).map(v => ({
+      text: v.change || "",
+      meta: v.why || "",
+    })),
+    font: fBody, gap: 16,
   });
 
   if (d.sql_schema) add({
